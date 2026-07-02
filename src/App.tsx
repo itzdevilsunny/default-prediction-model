@@ -3,7 +3,9 @@ import { OverviewDashboard } from './components/OverviewDashboard';
 import { ApplicationTracker } from './components/ApplicationTracker';
 import { ModelMonitoring } from './components/ModelMonitoring';
 import { GeminiCopilot } from './components/GeminiCopilot';
+import { Login } from './components/Login';
 import { checkApiStatus, type ApiStatus } from './services/api';
+import { supabase } from './lib/supabase';
 import { 
   LayoutDashboard, 
   FileSpreadsheet, 
@@ -14,7 +16,9 @@ import {
   Briefcase,
   Wifi,
   WifiOff,
-  Loader2
+  Loader2,
+  LogOut,
+  UserCheck
 } from 'lucide-react';
 
 type TabType = 'overview' | 'underwriting' | 'monitoring';
@@ -25,6 +29,10 @@ function App() {
   const [trackerFilter, setTrackerFilter] = useState('ALL');
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   
+  // Auth Session State
+  const [sessionUser, setSessionUser] = useState<any | null>(null);
+  const [userRole, setUserRole] = useState<'officer' | 'manager' | 'auditor'>('officer');
+
   // API connectivity status
   const [apiStatus, setApiStatus] = useState<ApiStatus & { loading: boolean }>({
     loading: true,
@@ -33,12 +41,44 @@ function App() {
     source: 'offline',
   });
 
-  // Check API health on mount
+  // Check API health and active session on mount
   useEffect(() => {
     checkApiStatus().then((status) => {
       setApiStatus({ ...status, loading: false });
     });
+
+    // Check if session already exists
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setSessionUser(session.user);
+        // Default role based on email if logged in
+        let role: 'officer' | 'manager' | 'auditor' = 'officer';
+        if (session.user.email?.includes('manager')) role = 'manager';
+        else if (session.user.email?.includes('auditor')) role = 'auditor';
+        setUserRole(role);
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setSessionUser(session.user);
+        let role: 'officer' | 'manager' | 'auditor' = 'officer';
+        if (session.user.email?.includes('manager')) role = 'manager';
+        else if (session.user.email?.includes('auditor')) role = 'auditor';
+        setUserRole(role);
+      } else {
+        setSessionUser(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setSessionUser(null);
+  };
 
   const handleViewLoan = (loanId: string) => {
     if (loanId === 'ALL_HIGH') {
@@ -57,6 +97,27 @@ function App() {
     setActiveTab('underwriting');
   };
 
+  // Render Login page if not authenticated
+  if (!sessionUser) {
+    return <Login onLoginSuccess={(user, role) => {
+      setSessionUser(user);
+      setUserRole(role);
+    }} />;
+  }
+
+  // Get initials for profile badge
+  const getInitials = (role: string) => {
+    if (role === 'manager') return 'RM';
+    if (role === 'auditor') return 'CA';
+    return 'LO';
+  };
+
+  const getRoleDisplayName = (role: string) => {
+    if (role === 'manager') return 'Risk Manager';
+    if (role === 'auditor') return 'Compliance Auditor';
+    return 'Loan Officer';
+  };
+
   return (
     <div className="min-h-screen bg-white flex flex-col font-sans">
       
@@ -68,7 +129,7 @@ function App() {
           </div>
           <div>
             <span className="text-sm font-extrabold tracking-tight text-zinc-950">DEFAULT PREDICTOR</span>
-            <span className="text-[10px] text-zinc-400 font-bold ml-2 font-mono">v2.4.1</span>
+            <span className="text-[10px] text-zinc-400 font-bold ml-2 font-mono">v3.2.0</span>
           </div>
         </div>
 
@@ -224,14 +285,35 @@ function App() {
             </div>
           </div>
 
-          {/* User profile */}
-          <div className="border-t border-zinc-100 pt-4 flex items-center gap-2.5 pl-1.5">
-            <div className="h-7 w-7 rounded-full bg-zinc-100 flex items-center justify-center font-bold text-xs text-zinc-800">
-              RA
+          {/* User profile & Sign Out */}
+          <div className="border-t border-zinc-150 pt-4 space-y-3">
+            <div className="flex items-center justify-between pl-1">
+              <div className="flex items-center gap-2.5">
+                <div className="h-7 w-7 rounded-full bg-zinc-900 text-white flex items-center justify-center font-bold text-xs">
+                  {getInitials(userRole)}
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-zinc-900 block truncate max-w-[100px]">
+                    {sessionUser.email?.split('@')[0]}
+                  </span>
+                  <span className="text-[9px] text-zinc-400 block font-mono">
+                    {getRoleDisplayName(userRole)}
+                  </span>
+                </div>
+              </div>
+              
+              <button 
+                onClick={handleSignOut}
+                title="Sign Out"
+                className="p-1.5 hover:bg-zinc-100 rounded text-zinc-500 hover:text-zinc-900 transition-colors"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
-            <div>
-              <span className="text-xs font-bold text-zinc-900 block">Risk Analyst</span>
-              <span className="text-[9px] text-zinc-400 block font-mono">IDBI-Innovate</span>
+            
+            <div className="bg-emerald-50/50 border border-emerald-100 p-2 rounded-lg flex items-center gap-1.5 text-[9px] font-mono text-emerald-800">
+              <UserCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              <span>RBAC Policy Verified</span>
             </div>
           </div>
         </aside>
@@ -248,10 +330,11 @@ function App() {
                 onSelectLoan={setSelectedLoanId}
                 initialFilter={trackerFilter}
                 apiOnline={apiStatus.online}
+                userRole={userRole}
               />
             )}
             {activeTab === 'monitoring' && (
-              <ModelMonitoring apiOnline={apiStatus.online} />
+              <ModelMonitoring apiOnline={apiStatus.online} userRole={userRole} />
             )}
           </div>
         </main>

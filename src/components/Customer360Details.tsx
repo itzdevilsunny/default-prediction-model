@@ -6,9 +6,10 @@ import { FileSpreadsheet, MessageSquare, Newspaper, HelpCircle, FileText, CheckC
 interface Customer360DetailsProps {
   loan: Loan;
   onUpdate?: () => void;
+  userRole?: 'officer' | 'manager' | 'auditor';
 }
 
-export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, onUpdate }) => {
+export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, onUpdate, userRole }) => {
   const [riskOverride, setRiskOverride] = useState(loan.riskTier);
   const [auditNotes, setAuditNotes] = useState('');
   const [isAudited, setIsAudited] = useState(false);
@@ -184,24 +185,30 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
         ) : (
           <div className="space-y-2 text-xs">
             <p className="text-zinc-500">This loan is currently **active**. Mark the real-world outcome below to simulate default feedback loop retraining:</p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={isResolving}
-                onClick={() => handleResolveOutcome(0)}
-                className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                Mark as Repaid
-              </button>
-              <button
-                type="button"
-                disabled={isResolving}
-                onClick={() => handleResolveOutcome(1)}
-                className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                Mark as Defaulted
-              </button>
-            </div>
+            {userRole === 'manager' ? (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isResolving}
+                  onClick={() => handleResolveOutcome(0)}
+                  className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  Mark as Repaid
+                </button>
+                <button
+                  type="button"
+                  disabled={isResolving}
+                  onClick={() => handleResolveOutcome(1)}
+                  className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  Mark as Defaulted
+                </button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 p-2.5 rounded-lg font-medium">
+                🔒 Outcome feedback resolution is restricted to **Risk Managers** only.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -384,48 +391,54 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
           Underwriter Override Controls
         </h4>
         
-        <form onSubmit={handleAuditSubmit} className="space-y-3.5">
-          <div>
-            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Override Risk Status</label>
-            <select
-              value={riskOverride}
-              onChange={(e) => setRiskOverride(e.target.value as any)}
-              title="Override Risk Status"
-              aria-label="Override Risk Status"
-              className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-brand-accent focus:border-brand-accent cursor-pointer"
-            >
-              <option value="Low">Low Risk (Approved)</option>
-              <option value="Medium">Medium Risk (Watchlist)</option>
-              <option value="High">High Risk (Escalate)</option>
-            </select>
-          </div>
+        {userRole === 'manager' ? (
+          <form onSubmit={handleAuditSubmit} className="space-y-3.5">
+            <div>
+              <label className="text-[11px] font-medium text-zinc-400 block mb-1">Override Risk Status</label>
+              <select
+                value={riskOverride}
+                onChange={(e) => setRiskOverride(e.target.value as any)}
+                title="Override Risk Status"
+                aria-label="Override Risk Status"
+                className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-brand-accent focus:border-brand-accent cursor-pointer"
+              >
+                <option value="Low">Low Risk (Approved)</option>
+                <option value="Medium">Medium Risk (Watchlist)</option>
+                <option value="High">High Risk (Escalate)</option>
+              </select>
+            </div>
 
-          <div>
-            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Audit Notes / Overriding Justification</label>
-            <textarea
-              rows={2}
-              placeholder="Provide reason for overriding or locking file..."
-              value={auditNotes}
-              onChange={(e) => setAuditNotes(e.target.value)}
-              className="w-full bg-white border border-zinc-200 rounded-lg p-2.5 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-brand-accent focus:border-brand-accent"
-            />
-          </div>
+            <div>
+              <label className="text-[11px] font-medium text-zinc-400 block mb-1">Audit Notes / Overriding Justification</label>
+              <textarea
+                rows={2}
+                placeholder="Provide reason for overriding or locking file..."
+                value={auditNotes}
+                onChange={(e) => setAuditNotes(e.target.value)}
+                className="w-full bg-white border border-zinc-200 rounded-lg p-2.5 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-brand-accent focus:border-brand-accent"
+              />
+            </div>
 
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={isAudited}
-              className="flex-1 bg-zinc-950 hover:bg-zinc-900 text-white text-xs font-semibold py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-            >
-              {isAudited ? 'Logging Audit...' : 'Log & Sign File'}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={isAudited}
+                className="flex-1 bg-zinc-950 hover:bg-zinc-900 text-white text-xs font-semibold py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+              >
+                {isAudited ? 'Logging Audit...' : 'Log & Sign File'}
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-1 text-[10px] text-zinc-400 justify-center">
+              <ShieldAlert className="h-3 w-3" />
+              <span>Updates will write directly to Supabase logs.</span>
+            </div>
+          </form>
+        ) : (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-3 rounded-lg font-medium">
+            🔒 Risk status overrides and manual signing are restricted to **Risk Managers** only.
           </div>
-          
-          <div className="flex items-center gap-1 text-[10px] text-zinc-400 justify-center">
-            <ShieldAlert className="h-3 w-3" />
-            <span>Updates will write directly to Supabase logs.</span>
-          </div>
-        </form>
+        )}
       </div>
     </div>
   );

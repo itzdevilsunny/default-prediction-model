@@ -10,6 +10,7 @@ interface ApplicationTrackerProps {
   onSelectLoan: (loanId: string | null) => void;
   initialFilter?: string;
   apiOnline?: boolean;
+  userRole?: 'officer' | 'manager' | 'auditor';
 }
 
 export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
@@ -17,6 +18,7 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
   onSelectLoan,
   initialFilter = 'ALL',
   apiOnline,
+  userRole,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loanTypeFilter, setLoanTypeFilter] = useState('ALL');
@@ -166,13 +168,19 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
             Analyze credit files and default probabilities forecasted 12 months in advance.
           </p>
         </div>
-        <button
-          onClick={() => setIsFormOpen(true)}
-          className="mt-4 md:mt-0 flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors"
-        >
-          <PlusCircle className="h-4 w-4" />
-          Ingest Application
-        </button>
+        {userRole !== 'auditor' ? (
+          <button
+            onClick={() => setIsFormOpen(true)}
+            className="mt-4 md:mt-0 flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors"
+          >
+            <PlusCircle className="h-4 w-4" />
+            Ingest Application
+          </button>
+        ) : (
+          <div className="mt-4 md:mt-0 text-[10px] text-zinc-500 bg-zinc-50 border border-zinc-200 px-3.5 py-2 rounded-lg font-mono font-bold">
+            🔒 Auditor Read-Only
+          </div>
+        )}
       </div>
 
       {/* Main Split Layout */}
@@ -362,6 +370,7 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
               <Customer360Details 
                 loan={selectedLoan} 
                 onUpdate={() => setRefreshTrigger((prev) => prev + 1)}
+                userRole={userRole}
               />
             </div>
           </div>

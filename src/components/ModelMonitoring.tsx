@@ -5,9 +5,10 @@ import { getModelMetrics, retrainModel, type ModelMetrics } from '../services/ap
 
 interface ModelMonitoringProps {
   apiOnline?: boolean;
+  userRole?: 'officer' | 'manager' | 'auditor';
 }
 
-export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) => {
+export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline, userRole }) => {
   const evolutionChartRef = useRef<HTMLDivElement>(null);
   const importanceChartRef = useRef<HTMLDivElement>(null);
   const driftChartRef = useRef<HTMLDivElement>(null);
@@ -335,18 +336,24 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
              'Population Stable (No Drift)'}
           </div>
 
-          <button
-            onClick={handleRetrain}
-            disabled={isRetraining}
-            className="flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
-          >
-            {isRetraining ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            Retrain Model Pipeline
-          </button>
+          {userRole === 'manager' ? (
+            <button
+              onClick={handleRetrain}
+              disabled={isRetraining}
+              className="flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            >
+              {isRetraining ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Retrain Model Pipeline
+            </button>
+          ) : (
+            <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-3.5 py-2 rounded-lg font-mono font-bold">
+              🔒 Retraining Locked
+            </div>
+          )}
         </div>
       </div>
 
