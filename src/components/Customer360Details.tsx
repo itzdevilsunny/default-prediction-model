@@ -99,12 +99,12 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
             Decisioning & Pricing Engine
           </span>
           <span className={`text-xs font-bold uppercase px-2.5 py-1 rounded-md border ${
-            loan.decisionStatus === 'APPROVED' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
-            loan.decisionStatus === 'REJECTED' ? 'bg-rose-50 border-rose-200 text-rose-700' :
+            (loan.decisionStatus || 'REFER') === 'APPROVED' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+            (loan.decisionStatus || 'REFER') === 'REJECTED' ? 'bg-rose-50 border-rose-200 text-rose-700' :
             'bg-amber-50 border-amber-200 text-amber-700'
           }`}>
-            {loan.decisionStatus === 'APPROVED' ? '🟢 APPROVED' :
-             loan.decisionStatus === 'REJECTED' ? '🔴 REJECTED' :
+            {(loan.decisionStatus || 'REFER') === 'APPROVED' ? '🟢 APPROVED' :
+             (loan.decisionStatus || 'REFER') === 'REJECTED' ? '🔴 REJECTED' :
              '🟡 REFER'}
           </span>
         </div>
@@ -114,7 +114,7 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Credit Limit Recommendation</span>
             <span className="font-bold text-zinc-900">
-              {loan.decisionStatus === 'REJECTED' ? '$0' : formatCurrency(loan.recommendedLimit)}
+              {loan.decisionStatus === 'REJECTED' ? '$0' : formatCurrency(loan.recommendedLimit ?? loan.amount ?? 0)}
             </span>
           </div>
           <div className="w-full bg-zinc-100 h-2 rounded overflow-hidden flex">
@@ -126,14 +126,14 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
               }`}
               style={{ 
                 width: loan.decisionStatus === 'REJECTED' ? '0%' : 
-                       `${Math.min(100, (loan.recommendedLimit / loan.amount) * 100)}%` 
+                       `${Math.min(100, (((loan.recommendedLimit ?? loan.amount ?? 0)) / (loan.amount ?? 1)) * 100)}%` 
               }}
             ></div>
           </div>
           <div className="flex justify-between text-[9px] text-zinc-400">
-            <span>Requested: {formatCurrency(loan.amount)}</span>
+            <span>Requested: {formatCurrency(loan.amount ?? 0)}</span>
             <span>Recommended Limit Ratio: {loan.decisionStatus === 'REJECTED' ? '0%' : 
-              `${Math.round((loan.recommendedLimit / loan.amount) * 100)}%`}</span>
+              `${Math.round((((loan.recommendedLimit ?? loan.amount ?? 0)) / (loan.amount ?? 1)) * 100)}%`}</span>
           </div>
         </div>
 
@@ -142,22 +142,22 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Recommended Pricing</span>
             <span className="font-bold text-blue-600 font-mono text-sm">
-              {loan.recommendedApr.toFixed(2)}% APR
+              {(loan.recommendedApr ?? loan.interestRate ?? 7.0).toFixed(2)}% APR
             </span>
           </div>
           
           <div className="grid grid-cols-3 gap-2 text-center bg-white border border-zinc-100 p-2 rounded-lg text-[10px] font-mono">
             <div>
               <span className="text-[8px] text-zinc-400 block uppercase font-sans">Base APR</span>
-              <span className="font-bold text-zinc-700">{loan.baseRate.toFixed(2)}%</span>
+              <span className="font-bold text-zinc-700">{(loan.baseRate ?? loan.interestRate ?? 7.0).toFixed(2)}%</span>
             </div>
             <div className="border-x border-zinc-100">
               <span className="text-[8px] text-zinc-400 block uppercase font-sans">Risk Premium</span>
-              <span className="font-bold text-rose-600">+{loan.riskPremium.toFixed(2)}%</span>
+              <span className="font-bold text-rose-600">+{(loan.riskPremium ?? 0).toFixed(2)}%</span>
             </div>
             <div>
               <span className="text-[8px] text-zinc-400 block uppercase font-sans">Requested APR</span>
-              <span className="font-bold text-zinc-400">{loan.interestRate.toFixed(2)}%</span>
+              <span className="font-bold text-zinc-400">{(loan.interestRate ?? 7.0).toFixed(2)}%</span>
             </div>
           </div>
         </div>

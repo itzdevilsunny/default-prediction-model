@@ -33,6 +33,13 @@ export interface Loan {
   // Explanation
   shapExplanations: ShapValue[];
   aiRiskSummary: string;
+
+  // Decisioning & Pricing Engine
+  decisionStatus?: 'APPROVED' | 'REJECTED' | 'REFER';
+  recommendedApr?: number;
+  recommendedLimit?: number;
+  baseRate?: number;
+  riskPremium?: number;
 }
 
 export const mockLoans: Loan[] = [

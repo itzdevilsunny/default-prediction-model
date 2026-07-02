@@ -48,11 +48,11 @@ export interface Loan {
   actualDefault?: number | null; // 0=Repaid, 1=Defaulted, null=Active
   
   // Decisioning & Pricing Engine
-  decisionStatus: 'APPROVED' | 'REJECTED' | 'REFER';
-  recommendedApr: number;
-  recommendedLimit: number;
-  baseRate: number;
-  riskPremium: number;
+  decisionStatus?: 'APPROVED' | 'REJECTED' | 'REFER';
+  recommendedApr?: number;
+  recommendedLimit?: number;
+  baseRate?: number;
+  riskPremium?: number;
 }
 
 export interface PortfolioSummary {
