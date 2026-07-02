@@ -30,6 +30,7 @@ function App() {
     loading: true,
     online: false,
     url: null,
+    source: 'offline',
   });
 
   // Check API health on mount
