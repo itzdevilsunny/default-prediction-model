@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { OverviewDashboard } from './components/OverviewDashboard';
 import { ApplicationTracker } from './components/ApplicationTracker';
 import { ModelMonitoring } from './components/ModelMonitoring';
 import { GeminiCopilot } from './components/GeminiCopilot';
+import { checkApiStatus, type ApiStatus } from './services/api';
 import { 
   LayoutDashboard, 
   FileSpreadsheet, 
@@ -10,7 +11,10 @@ import {
   Sparkles, 
   TrendingUp,
   Compass,
-  Briefcase
+  Briefcase,
+  Wifi,
+  WifiOff,
+  Loader2
 } from 'lucide-react';
 
 type TabType = 'overview' | 'underwriting' | 'monitoring';
@@ -19,11 +23,22 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [selectedLoanId, setSelectedLoanId] = useState<string | null>(null);
   const [trackerFilter, setTrackerFilter] = useState('ALL');
-  
-  // Gemini Copilot drawer state
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
+  
+  // API connectivity status
+  const [apiStatus, setApiStatus] = useState<ApiStatus & { loading: boolean }>({
+    loading: true,
+    online: false,
+    url: null,
+  });
 
-  // Switch tabs and set filters/loan ids
+  // Check API health on mount
+  useEffect(() => {
+    checkApiStatus().then((status) => {
+      setApiStatus({ ...status, loading: false });
+    });
+  }, []);
+
   const handleViewLoan = (loanId: string) => {
     if (loanId === 'ALL_HIGH') {
       setTrackerFilter('ALL_HIGH');
@@ -35,7 +50,6 @@ function App() {
     setActiveTab('underwriting');
   };
 
-  // Inspect specific loan from Copilot chat
   const handleInspectLoanFromCopilot = (loanId: string) => {
     setSelectedLoanId(loanId);
     setTrackerFilter('ALL');
@@ -57,7 +71,7 @@ function App() {
           </div>
         </div>
 
-        {/* Global summary details */}
+        {/* Global summary */}
         <div className="hidden md:flex items-center gap-8 text-xs">
           <div className="flex flex-col items-end">
             <span className="text-zinc-400 font-semibold uppercase tracking-wider text-[9px]">Active Portfolio</span>
@@ -72,6 +86,30 @@ function App() {
           <div className="flex flex-col items-end">
             <span className="text-zinc-400 font-semibold uppercase tracking-wider text-[9px]">Target Precision</span>
             <span className="font-bold text-emerald-600 font-mono mt-0.5">91.2% ROC-AUC</span>
+          </div>
+          <div className="h-8 w-[1px] bg-zinc-200"></div>
+          
+          {/* Live API status badge */}
+          <div className="flex flex-col items-end">
+            <span className="text-zinc-400 font-semibold uppercase tracking-wider text-[9px]">API Status</span>
+            <div className="flex items-center gap-1 mt-0.5">
+              {apiStatus.loading ? (
+                <>
+                  <Loader2 className="h-3 w-3 text-zinc-400 animate-spin" />
+                  <span className="font-bold text-zinc-400 font-mono text-[10px]">Connecting...</span>
+                </>
+              ) : apiStatus.online ? (
+                <>
+                  <Wifi className="h-3 w-3 text-emerald-500" />
+                  <span className="font-bold text-emerald-600 font-mono text-[10px]">API Live</span>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="h-3 w-3 text-amber-500" />
+                  <span className="font-bold text-amber-600 font-mono text-[10px]">Warming Up</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -91,7 +129,27 @@ function App() {
         </div>
       </header>
 
-      {/* Main Layout containing Side Navigation & Content */}
+      {/* Render cold-start warning banner */}
+      {!apiStatus.loading && !apiStatus.online && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-amber-700">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span className="font-semibold">Render API is waking up</span>
+            <span className="text-amber-600">— The free-tier server starts cold. Dashboard showing local data; live API will connect shortly.</span>
+          </div>
+          <button
+            onClick={() => {
+              setApiStatus(prev => ({ ...prev, loading: true }));
+              checkApiStatus().then(s => setApiStatus({ ...s, loading: false }));
+            }}
+            className="text-amber-700 font-bold hover:underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Main Layout */}
       <div className="flex-1 flex items-stretch">
         
         {/* Sidebar Left Navigation */}
@@ -136,7 +194,7 @@ function App() {
               </nav>
             </div>
 
-            {/* Quick Context panel */}
+            {/* System Health */}
             <div className="border-t border-zinc-100 pt-5">
               <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest pl-2">System Health</span>
               <div className="mt-3.5 space-y-3.5 pl-2 font-mono text-[10px]">
@@ -150,13 +208,22 @@ function App() {
                 </div>
                 <div className="flex items-center justify-between text-zinc-500">
                   <span className="flex items-center gap-1.5"><Compass className="h-3 w-3 text-zinc-400" /> Host API</span>
-                  <span className="font-bold text-zinc-900">Render</span>
+                  <div className="flex items-center gap-1">
+                    {apiStatus.loading ? (
+                      <Loader2 className="h-2.5 w-2.5 text-zinc-400 animate-spin" />
+                    ) : apiStatus.online ? (
+                      <div className="h-1.5 w-1.5 rounded-full bg-emerald-500"></div>
+                    ) : (
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"></div>
+                    )}
+                    <span className="font-bold text-zinc-900">Render</span>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* User profile identifier */}
+          {/* User profile */}
           <div className="border-t border-zinc-100 pt-4 flex items-center gap-2.5 pl-1.5">
             <div className="h-7 w-7 rounded-full bg-zinc-100 flex items-center justify-center font-bold text-xs text-zinc-800">
               RA
@@ -172,28 +239,28 @@ function App() {
         <main className="flex-1 p-6 lg:p-8 overflow-y-auto bg-white">
           <div className="max-w-6xl mx-auto h-full">
             {activeTab === 'overview' && (
-              <OverviewDashboard onViewLoan={handleViewLoan} />
+              <OverviewDashboard onViewLoan={handleViewLoan} apiOnline={apiStatus.online} />
             )}
             {activeTab === 'underwriting' && (
               <ApplicationTracker 
                 selectedLoanId={selectedLoanId}
                 onSelectLoan={setSelectedLoanId}
                 initialFilter={trackerFilter}
+                apiOnline={apiStatus.online}
               />
             )}
             {activeTab === 'monitoring' && (
-              <ModelMonitoring />
+              <ModelMonitoring apiOnline={apiStatus.online} />
             )}
           </div>
         </main>
 
-        {/* Gemini Copilot Drawer Sidebar */}
+        {/* Gemini Copilot Drawer */}
         <GeminiCopilot 
           onInspectLoan={handleInspectLoanFromCopilot}
           isOpen={isCopilotOpen}
           onClose={() => setIsCopilotOpen(false)}
         />
-
       </div>
     </div>
   );

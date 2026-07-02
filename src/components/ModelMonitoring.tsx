@@ -2,7 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import * as echarts from 'echarts';
 import { ShieldCheck, Cpu, AlertCircle } from 'lucide-react';
 
-export const ModelMonitoring: React.FC = () => {
+interface ModelMonitoringProps {
+  apiOnline?: boolean;
+}
+
+export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline: _apiOnline }) => {
   const evolutionChartRef = useRef<HTMLDivElement>(null);
   const importanceChartRef = useRef<HTMLDivElement>(null);
 

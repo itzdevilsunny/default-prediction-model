@@ -1,15 +1,69 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import { mockPortfolioSummary, mockLoans } from '../data/mockLoans';
+import { getPortfolioSummary, getLoans, type PortfolioSummary, type Loan } from '../services/api';
 import { TrendingUp, FileText, Database, ShieldAlert, Award, ArrowUpRight } from 'lucide-react';
 
 interface OverviewDashboardProps {
   onViewLoan: (loanId: string) => void;
+  apiOnline?: boolean;
 }
 
-export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan }) => {
+export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan, apiOnline }) => {
   const riskChartRef = useRef<HTMLDivElement>(null);
   const dataChartRef = useRef<HTMLDivElement>(null);
+
+  // Live data state (falls back to mock data when API is offline)
+  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioSummary | null>(null);
+  const [liveLoans, setLiveLoans] = useState<Loan[] | null>(null);
+
+  useEffect(() => {
+    if (apiOnline) {
+      getPortfolioSummary().then(setPortfolioSummary).catch(console.error);
+      getLoans().then(r => setLiveLoans(r.loans)).catch(console.error);
+    }
+  }, [apiOnline]);
+
+  // Resolved data: prefer live API data, fallback to mock
+  const summary = portfolioSummary
+    ? {
+        totalExposure: portfolioSummary.total_exposure,
+        totalLoans: portfolioSummary.total_loans,
+        highRiskCount: portfolioSummary.high_risk_count,
+        mediumRiskCount: portfolioSummary.medium_risk_count,
+        lowRiskCount: portfolioSummary.low_risk_count,
+        accuracyMetric: portfolioSummary.model_accuracy,
+        aucScore: portfolioSummary.model_auc,
+        structuredRecords: portfolioSummary.structured_records,
+        unstructuredRecords: portfolioSummary.unstructured_records,
+      }
+    : mockPortfolioSummary;
+
+  const resolvedLoans = liveLoans
+    ? liveLoans.map(l => ({
+        id: l.id,
+        borrowerName: l.borrower_name,
+        loanType: l.loan_type,
+        borrowerSegment: l.borrower_segment,
+        amount: l.amount,
+        interestRate: l.interest_rate,
+        termMonths: l.term_months,
+        startDate: l.start_date,
+        ficoScore: l.fico_score,
+        dti: l.dti,
+        missedPayments12M: l.missed_payments_12m,
+        officerNotesSentiment: l.officer_notes_sentiment as any,
+        officerNotesSummary: l.officer_notes_summary,
+        sectorNewsSentiment: l.sector_news_sentiment as any,
+        sectorNewsSummary: l.sector_news_summary,
+        communicationSentiment: l.communication_sentiment as any,
+        defaultProbability12M: l.default_probability_12m,
+        riskTier: l.risk_tier as any,
+        lastUpdated: l.last_updated,
+        aiRiskSummary: l.ai_risk_summary,
+        shapValues: [],
+      }))
+    : mockLoans;
 
   // Stats calculation
   const formatCurrency = (value: number) => {
@@ -25,9 +79,9 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
     if (riskChartRef.current) {
       const chart = echarts.init(riskChartRef.current);
       
-      // Calculate distribution buckets based on mock loans
+      // Calculate distribution buckets based on resolved loans (live or mock)
       const buckets = Array(10).fill(0);
-      mockLoans.forEach((loan) => {
+      resolvedLoans.forEach((loan) => {
         const bucketIndex = Math.min(Math.floor(loan.defaultProbability12M * 10), 9);
         buckets[bucketIndex]++;
       });
@@ -95,7 +149,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
         chart.dispose();
       };
     }
-  }, []);
+  }, [resolvedLoans]);
 
   useEffect(() => {
     // 2. Structured vs Unstructured Data Ingestion Chart
@@ -176,8 +230,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
     }
   }, []);
 
-  // Filter high risk loans for quick action list
-  const highRiskLoans = mockLoans
+  // Filter high risk loans for quick action list (live or mock)
+  const highRiskLoans = resolvedLoans
     .filter((l) => l.riskTier === 'High')
     .slice(0, 4);
 
@@ -209,7 +263,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
           </div>
           <div className="mt-4">
             <h3 className="text-2xl font-bold font-mono tracking-tight text-zinc-900">
-              {formatCurrency(mockPortfolioSummary.totalExposure)}
+              {formatCurrency(summary.totalExposure)}
             </h3>
             <div className="flex items-center gap-1.5 mt-2 text-xs">
               <span className="font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-mono">+12.4%</span>
@@ -226,7 +280,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
           </div>
           <div className="mt-4">
             <h3 className="text-2xl font-bold font-mono tracking-tight text-zinc-900">
-              {(mockPortfolioSummary.accuracyMetric * 100).toFixed(1)}%
+              {(summary.accuracyMetric * 100).toFixed(1)}%
             </h3>
             <div className="flex items-center gap-1.5 mt-2 text-xs">
               <span className="font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-mono">&gt;90%</span>

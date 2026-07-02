@@ -8,12 +8,13 @@ interface ApplicationTrackerProps {
   selectedLoanId: string | null;
   onSelectLoan: (loanId: string | null) => void;
   initialFilter?: string;
+  apiOnline?: boolean;
 }
 
 export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
   selectedLoanId,
   onSelectLoan,
-  initialFilter = 'ALL'
+  initialFilter = 'ALL',
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loanTypeFilter, setLoanTypeFilter] = useState('ALL');
