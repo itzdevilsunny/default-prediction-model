@@ -1,15 +1,18 @@
 import React, { useState } from 'react';
-import type { Loan } from '../data/mockLoans';
-import { FileSpreadsheet, MessageSquare, Newspaper, HelpCircle, FileText, CheckCircle, ShieldAlert } from 'lucide-react';
+import type { Loan } from '../services/api';
+import { submitAudit, submitLoanOutcome } from '../services/api';
+import { FileSpreadsheet, MessageSquare, Newspaper, HelpCircle, FileText, CheckCircle, ShieldAlert, Award } from 'lucide-react';
 
 interface Customer360DetailsProps {
   loan: Loan;
+  onUpdate?: () => void;
 }
 
-export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan }) => {
+export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, onUpdate }) => {
   const [riskOverride, setRiskOverride] = useState(loan.riskTier);
   const [auditNotes, setAuditNotes] = useState('');
   const [isAudited, setIsAudited] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -19,14 +22,42 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan }) 
     }).format(val);
   };
 
-  const handleAuditSubmit = (e: React.FormEvent) => {
+  const handleAuditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsAudited(true);
-    // Simulating database sync notice
-    setTimeout(() => {
+    try {
+      await submitAudit(loan.id, {
+        loan_id: loan.id,
+        analyst_name: 'Risk Analyst',
+        risk_override: riskOverride,
+        notes: auditNotes,
+        action: 'review',
+      });
+      alert(`Underwriter audit logged successfully for ${loan.borrowerName}.`);
+      setAuditNotes('');
+      if (onUpdate) onUpdate();
+    } catch (err: any) {
+      alert(`Audit submission failed: ${err.message}`);
+    } finally {
       setIsAudited(false);
-      alert(`Underwriter audit logged for ${loan.borrowerName}. (Database sync is pending backend deployment on Render/Supabase)`);
-    }, 1500);
+    }
+  };
+
+  const handleResolveOutcome = async (outcome: number) => {
+    setIsResolving(true);
+    try {
+      const success = await submitLoanOutcome(loan.id, outcome);
+      if (success) {
+        alert(`Loan resolved successfully as ${outcome === 1 ? 'DEFAULTED' : 'REPAID'}. The model feedback loop has updated the dataset.`);
+        if (onUpdate) onUpdate();
+      } else {
+        alert('Failed to resolve loan outcome. Check API status.');
+      }
+    } catch (err: any) {
+      alert(`Failed to resolve outcome: ${err.message}`);
+    } finally {
+      setIsResolving(false);
+    }
   };
 
   return (
@@ -59,6 +90,49 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan }) 
             style={{ width: `${loan.defaultProbability12M * 100}%` }}
           ></div>
         </div>
+      </div>
+
+      {/* Outcome Resolution Feedback Loop (Close the loop) */}
+      <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/10 space-y-3">
+        <div className="flex items-center gap-1.5 text-zinc-800 font-bold text-xs uppercase tracking-wider">
+          <Award className="h-4 w-4 text-zinc-600" />
+          Feedback Loop & Outcomes
+        </div>
+        {loan.actualDefault !== undefined && loan.actualDefault !== null ? (
+          <div className="text-xs space-y-1">
+            <span className="text-zinc-400">Loan Resolution Status:</span>
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-0.5 rounded font-mono font-bold uppercase ${
+                loan.actualDefault === 1 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+              }`}>
+                {loan.actualDefault === 1 ? 'DEFAULTED' : 'REPAID'}
+              </span>
+              <span className="text-zinc-500 italic">This outcome is used in retraining calculations.</span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2 text-xs">
+            <p className="text-zinc-500">This loan is currently **active**. Mark the real-world outcome below to simulate default feedback loop retraining:</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={isResolving}
+                onClick={() => handleResolveOutcome(0)}
+                className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+              >
+                Mark as Repaid
+              </button>
+              <button
+                type="button"
+                disabled={isResolving}
+                onClick={() => handleResolveOutcome(1)}
+                className="flex-1 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 py-1.5 px-3 rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+              >
+                Mark as Defaulted
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Structured Credit Profile */}
@@ -117,56 +191,62 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan }) 
 
         {/* Custom pure CSS waterfall bars */}
         <div className="space-y-2.5">
-          {loan.shapExplanations.map((exp, index) => {
-            const isRiskIncreaser = exp.value > 0;
-            const barWidth = Math.abs(exp.value) * 150; // Scaling for layout
+          {loan.shapExplanations && loan.shapExplanations.length > 0 ? (
+            loan.shapExplanations.map((exp, index) => {
+              const isRiskIncreaser = exp.value > 0;
+              const barWidth = Math.abs(exp.value) * 150; // Scaling for layout
 
-            return (
-              <div key={index} className="flex items-center justify-between text-xs gap-3">
-                <div className="w-[45%] truncate font-medium text-zinc-700" title={exp.feature}>
-                  {exp.feature}
-                </div>
-                
-                {/* Horizontal Bar Chart Representation */}
-                <div className="flex-1 flex items-center justify-center relative h-5 bg-zinc-50/50 rounded border border-zinc-100 overflow-hidden">
+              return (
+                <div key={index} className="flex items-center justify-between text-xs gap-3">
+                  <div className="w-[45%] truncate font-medium text-zinc-700" title={exp.feature}>
+                    {exp.feature}
+                  </div>
                   
-                  {/* Positive Contribution Bar (Increases risk -> Muted Red) */}
-                  {isRiskIncreaser && (
-                    <div 
-                      className="absolute right-1/2 h-full bg-rose-500/20 border-r border-rose-400"
-                      style={{ 
-                        width: `${Math.min(barWidth, 50)}%`, 
-                        left: '50%' 
-                      }}
-                    ></div>
-                  )}
+                  {/* Horizontal Bar Chart Representation */}
+                  <div className="flex-1 flex items-center justify-center relative h-5 bg-zinc-50/50 rounded border border-zinc-100 overflow-hidden">
+                    
+                    {/* Positive Contribution Bar */}
+                    {isRiskIncreaser && (
+                      <div 
+                        className="absolute right-1/2 h-full bg-rose-500/20 border-r border-rose-400"
+                        style={{ 
+                          width: `${Math.min(barWidth, 50)}%`, 
+                          left: '50%' 
+                        }}
+                      ></div>
+                    )}
 
-                  {/* Negative Contribution Bar (Decreases risk -> Muted Green/Blue) */}
-                  {!isRiskIncreaser && (
-                    <div 
-                      className="absolute left-1/2 h-full bg-emerald-500/15 border-l border-emerald-400"
-                      style={{ 
-                        width: `${Math.min(barWidth, 50)}%`,
-                        right: '50%',
-                        left: 'auto'
-                      }}
-                    ></div>
-                  )}
+                    {/* Negative Contribution Bar */}
+                    {!isRiskIncreaser && (
+                      <div 
+                        className="absolute left-1/2 h-full bg-emerald-500/15 border-l border-emerald-400"
+                        style={{ 
+                          width: `${Math.min(barWidth, 50)}%`,
+                          right: '50%',
+                          left: 'auto'
+                        }}
+                      ></div>
+                    )}
 
-                  {/* Center line divider */}
-                  <div className="absolute left-1/2 top-0 bottom-0 w-[1px] bg-zinc-300"></div>
+                    {/* Center line divider */}
+                    <div className="absolute left-1/2 top-0 bottom-0 w-[1px] bg-zinc-300"></div>
+                    
+                    <span className="absolute z-10 text-[9px] font-mono font-bold text-zinc-500">
+                      {exp.displayValue}
+                    </span>
+                  </div>
                   
-                  <span className="absolute z-10 text-[9px] font-mono font-bold text-zinc-500">
-                    {exp.displayValue}
-                  </span>
+                  <div className={`w-[12%] text-right font-mono font-bold ${isRiskIncreaser ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {exp.value > 0 ? '+' : ''}{(exp.value * 100).toFixed(0)}%
+                  </div>
                 </div>
-                
-                <div className={`w-[12%] text-right font-mono font-bold ${isRiskIncreaser ? 'text-rose-600' : 'text-emerald-600'}`}>
-                  {exp.value > 0 ? '+' : ''}{(exp.value * 100).toFixed(0)}%
-                </div>
-              </div>
-            );
-          })}
+              );
+            })
+          ) : (
+            <div className="text-xs text-zinc-400 italic text-center py-2">
+              No explanation weights generated for this application yet.
+            </div>
+          )}
         </div>
       </div>
 
@@ -268,18 +348,11 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan }) 
             >
               {isAudited ? 'Logging Audit...' : 'Log & Sign File'}
             </button>
-            
-            <button
-              type="button"
-              className="px-3 py-2 border border-zinc-200 text-zinc-600 rounded-lg text-xs font-semibold bg-white hover:bg-zinc-50 transition-colors"
-            >
-              Escalate File
-            </button>
           </div>
           
           <div className="flex items-center gap-1 text-[10px] text-zinc-400 justify-center">
             <ShieldAlert className="h-3 w-3" />
-            <span>Actions will sync to Render API & Supabase once backend is deployed.</span>
+            <span>Updates will write directly to Supabase logs.</span>
           </div>
         </form>
       </div>

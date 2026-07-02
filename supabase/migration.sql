@@ -1,13 +1,16 @@
 -- ============================================================
 -- Default Prediction Model — Supabase Database Schema
--- Run this in Supabase: Dashboard → SQL Editor → New Query
 -- ============================================================
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Drop existing tables
+DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS loans CASCADE;
+
 -- ─── 1. Loans Table ──────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS loans (
+CREATE TABLE loans (
   id                        TEXT PRIMARY KEY,
   borrower_name             TEXT NOT NULL,
   loan_type                 TEXT NOT NULL CHECK (loan_type IN ('SME', 'Mortgage', 'Business', 'Personal')),
@@ -29,11 +32,13 @@ CREATE TABLE IF NOT EXISTS loans (
   risk_tier                 TEXT NOT NULL CHECK (risk_tier IN ('Low', 'Medium', 'High')),
   last_updated              TEXT NOT NULL,
   ai_risk_summary           TEXT NOT NULL,
+  shap_explanations         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  actual_default            INTEGER CHECK (actual_default IN (0, 1)),
   created_at                TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ─── 2. Audit Logs Table ─────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS audit_logs (
+CREATE TABLE audit_logs (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   loan_id         TEXT NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
   analyst_name    TEXT NOT NULL,
@@ -47,123 +52,54 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 ALTER TABLE loans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Allow anon/publishable key full read access to loans
-CREATE POLICY "Allow public read loans"
-  ON loans FOR SELECT
-  TO anon
-  USING (true);
-
--- Allow anon key to update risk_tier (underwriter override from frontend)
-CREATE POLICY "Allow public update risk_tier"
-  ON loans FOR UPDATE
-  TO anon
-  USING (true)
-  WITH CHECK (true);
-
--- Allow anon key full read access to audit logs
-CREATE POLICY "Allow public read audit_logs"
-  ON audit_logs FOR SELECT
-  TO anon
-  USING (true);
-
--- Allow anon key to insert audit logs
-CREATE POLICY "Allow public insert audit_logs"
-  ON audit_logs FOR INSERT
-  TO anon
-  WITH CHECK (true);
+CREATE POLICY "Allow public read loans" ON loans FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow public update risk_tier" ON loans FOR UPDATE TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public read audit_logs" ON audit_logs FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow public insert audit_logs" ON audit_logs FOR INSERT TO anon WITH CHECK (true);
 
 -- ─── 4. Indexes for performance ──────────────────────────────────────────────
-CREATE INDEX IF NOT EXISTS idx_loans_risk_tier ON loans (risk_tier);
-CREATE INDEX IF NOT EXISTS idx_loans_loan_type ON loans (loan_type);
-CREATE INDEX IF NOT EXISTS idx_loans_default_probability ON loans (default_probability_12m DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_loan_id ON audit_logs (loan_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+CREATE INDEX idx_loans_risk_tier ON loans (risk_tier);
+CREATE INDEX idx_loans_loan_type ON loans (loan_type);
+CREATE INDEX idx_loans_default_probability ON loans (default_probability_12m DESC);
+CREATE INDEX idx_loans_actual_default ON loans (actual_default);
+CREATE INDEX idx_audit_logs_loan_id ON audit_logs (loan_id);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs (created_at DESC);
 
--- ─── 5. Seed Data — 10 Loan Portfolio ────────────────────────────────────────
-INSERT INTO loans (id, borrower_name, loan_type, borrower_segment, amount, interest_rate, term_months, start_date, fico_score, dti, missed_payments_12m, ltv, officer_notes_sentiment, officer_notes_summary, sector_news_sentiment, sector_news_summary, communication_sentiment, default_probability_12m, risk_tier, last_updated, ai_risk_summary)
+-- ─── 5. Seed Data ───────────────────────────────────────────────────────────
+INSERT INTO loans (id, borrower_name, loan_type, borrower_segment, amount, interest_rate, term_months, start_date, fico_score, dti, missed_payments_12m, ltv, officer_notes_sentiment, officer_notes_summary, sector_news_sentiment, sector_news_summary, communication_sentiment, default_probability_12m, risk_tier, last_updated, ai_risk_summary, shap_explanations, actual_default)
 VALUES
-  (
-    'LN-2026-041', 'Zeta Manufacturing LLC', 'SME', 'SME', 650000, 8.5, 60, '2024-03-15',
-    590, 48.5, 3, NULL,
-    'Negative', 'Borrower missed meetings. Declining operating cash flow. Inventory turnover slowed 40%. Partnership disputes.',
-    'Negative', 'Industrial supply chains face 15% tariff increases; manufacturing sector contracts third consecutive quarter.',
-    'Negative', 0.912, 'High', '2026-07-01',
-    'High default risk driven by acute operating cash flow compression, supply chain headwinds, and high debt service.'
-  ),
-  (
-    'LN-2026-078', 'Sarah Jenkins', 'Mortgage', 'Retail', 420000, 6.2, 360, '2022-11-10',
-    785, 28.0, 0, 72.0,
-    'Positive', 'Excellent communication. Stable employment as senior software engineer at Tier 1 tech firm.',
-    'Positive', 'Local real estate market shows steady 4.5% annual appreciation.',
-    'Positive', 0.018, 'Low', '2026-07-02',
-    'Extremely low credit risk. Strong repayment history and highly stable primary income source.'
-  ),
-  (
-    'LN-2026-102', 'Apex Tech Solutions Inc.', 'Business', 'Corporate', 1200000, 7.8, 48, '2025-01-05',
-    680, 44.2, 1, NULL,
-    'Neutral', 'Revenue grew 15% y-o-y, but margin compressed from 18% to 12%. Series B expected in 90 days.',
-    'Positive', 'Enterprise SaaS sector spending projects 18% growth over next 12 months.',
-    'Positive', 0.425, 'Medium', '2026-06-28',
-    'Moderate risk. High leverage balanced by growing customer base and strong sector tailwinds.'
-  ),
-  (
-    'LN-2026-119', 'Marcus Vance', 'Personal', 'Retail', 35000, 14.5, 36, '2025-06-20',
-    605, 52.0, 2, NULL,
-    'Negative', 'Temporary job loss followed by contract work. Credit card utilization increased from 35% to 88% in 6 months.',
-    'Neutral', 'Retail sales index flat. Gig economy employment index shows 4% growth.',
-    'Negative', 0.741, 'High', '2026-07-02',
-    'High default risk driven by high debt utilization and employment transition.'
-  ),
-  (
-    'LN-2026-003', 'Global Logistics Corp', 'Business', 'Corporate', 1500000, 6.9, 120, '2021-05-10',
-    740, 31.5, 0, NULL,
-    'Positive', 'Solid balance sheet. 2.1x current ratio. Successfully renewed long-term contracts.',
-    'Neutral', 'Global freight index fluctuates within normal bounds.',
-    'Positive', 0.068, 'Low', '2026-06-30',
-    'Very low risk. Strong corporate liquidity and locked-in contract revenues.'
-  ),
-  (
-    'LN-2026-204', 'Green Horizon Agriculture', 'SME', 'SME', 450000, 8.9, 72, '2023-10-12',
-    630, 47.0, 2, NULL,
-    'Negative', 'Crop yields fell 25% below forecast. Insurance payout covers only half of operating losses.',
-    'Negative', 'Extreme weather patterns trigger agricultural yield warnings.',
-    'Neutral', 0.814, 'High', '2026-07-01',
-    'High default risk. Crop losses drained cash reserves amid adverse weather forecasts.'
-  ),
-  (
-    'LN-2026-056', 'Dr. Arthur Pendelton', 'Personal', 'HNW', 150000, 7.2, 60, '2025-02-18',
-    760, 22.5, 0, NULL,
-    'Positive', 'Lead surgeon at County General. Stable, high salary. Excellent debt management.',
-    'Positive', 'Medical services sector showing strong pricing power.',
-    'Positive', 0.024, 'Low', '2026-06-25',
-    'Minimal risk. High, stable, non-cyclical professional income with low debt load.'
-  ),
-  (
-    'LN-2026-099', 'Nova Restaurant Group', 'SME', 'SME', 320000, 9.4, 48, '2024-07-22',
-    660, 41.0, 1, NULL,
-    'Neutral', '3rd location delayed by permitting issues, creating 3-month cash flow lag.',
-    'Negative', 'Hospitality sector reports 8% increase in labor costs.',
-    'Positive', 0.380, 'Medium', '2026-07-02',
-    'Moderate risk. Expansion friction caused temporary cash depletion, but core operations viable.'
-  ),
-  (
-    'LN-2026-112', 'Elite Freight Logistics', 'SME', 'SME', 280000, 8.2, 36, '2025-09-01',
-    620, 49.0, 2, NULL,
-    'Negative', 'Major corporate client representing 35% of revenue announced contract termination.',
-    'Neutral', 'Regional trucking volume steady, but fleet insurance rates increased 12%.',
-    'Neutral', 0.785, 'High', '2026-07-01',
-    'High credit risk. Imminent 35% revenue drop will severely stress cash flows.'
-  ),
-  (
-    'LN-2026-150', 'Diana Prince', 'Mortgage', 'HNW', 850000, 5.8, 360, '2023-08-01',
-    710, 36.5, 0, 65.0,
-    'Neutral', 'Income from real estate commissions and dividends. Seasonal variance but high net worth.',
-    'Neutral', 'Luxury residential market volume decreased 8%, median prices resilient.',
-    'Positive', 0.152, 'Low', '2026-07-02',
-    'Low credit risk. Variable income fully backed by conservative LTV ratio and liquid assets.'
-  )
-ON CONFLICT (id) DO NOTHING;
-
--- Verify
-SELECT 'Loans table seeded with ' || COUNT(*) || ' records.' AS status FROM loans;
-SELECT 'Audit logs table ready: ' || COUNT(*) || ' entries.' AS status FROM audit_logs;
+('LN-2026-100', 'Zeta Manufacturing LLC', 'SME', 'SME', 202451, 7.72, 60, '2024-10-01', 585, 48.1, 3, NULL, 'Negative', 'Client has FICO of 585. DTI is 48.1%. Missed payments: 3. Slow repayments, cash flow issues noted.', 'Positive', 'Sector news is positive due to current economic trends.', 'Negative', 0.775, 'High', '2026-07-01', 'Default risk is high at 77.5%. Key drivers are FICO credit score of 585 and DTI of 48.1%. Crucially, the borrower has missed 3 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.287, "displayValue": "+28.7%"}, {"feature": "DTI Ratio", "value": 0.164, "displayValue": "+16.4%"}, {"feature": "Missed Payments (12M)", "value": 0.625, "displayValue": "+62.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 1),
+('LN-2026-101', 'Sarah Jenkins', 'Mortgage', 'Retail', 931453, 5.94, 360, '2024-06-04', 730, 28.3, 0, 90.4, 'Positive', 'Client has FICO of 730. DTI is 28.3%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Neutral', 0.407, 'Medium', '2026-07-01', 'Default risk is medium at 40.7%. Key drivers are FICO credit score of 730 and DTI of 28.3%.', '[{"feature": "FICO Credit Score", "value": -0.075, "displayValue": "-7.5%"}, {"feature": "DTI Ratio", "value": -0.084, "displayValue": "-8.4%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-102', 'Apex Tech Solutions Inc.', 'SME', 'SME', 946765, 8.29, 36, '2024-07-03', 638, 42.2, 0, NULL, 'Negative', 'Client has FICO of 638. DTI is 42.2%. Missed payments: 0. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.673, 'High', '2026-07-01', 'Default risk is high at 67.3%. Key drivers are FICO credit score of 638 and DTI of 42.2%. Crucially, the borrower has missed 0 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.155, "displayValue": "+15.5%"}, {"feature": "DTI Ratio", "value": 0.09, "displayValue": "+9.0%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 0),
+('LN-2026-103', 'Marcus Vance', 'Business', 'Corporate', 1468353, 9.39, 60, '2024-08-21', 730, 18.1, 0, NULL, 'Positive', 'Client has FICO of 730. DTI is 18.1%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Positive', 'Sector news is positive due to current economic trends.', 'Positive', 0.322, 'Medium', '2026-07-01', 'Default risk is medium at 32.2%. Key drivers are FICO credit score of 730 and DTI of 18.1%.', '[{"feature": "FICO Credit Score", "value": -0.075, "displayValue": "-7.5%"}, {"feature": "DTI Ratio", "value": -0.211, "displayValue": "-21.1%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 0),
+('LN-2026-104', 'Global Logistics Corp', 'Business', 'Corporate', 491110, 8.28, 60, '2024-03-15', 721, 27.0, 0, NULL, 'Neutral', 'Client has FICO of 721. DTI is 27.0%. Missed payments: 0.', 'Positive', 'Sector news is positive due to current economic trends.', 'Negative', 0.412, 'Medium', '2026-07-01', 'Default risk is medium at 41.2%. Key drivers are FICO credit score of 721 and DTI of 27.0%.', '[{"feature": "FICO Credit Score", "value": -0.052, "displayValue": "-5.2%"}, {"feature": "DTI Ratio", "value": -0.1, "displayValue": "-10.0%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 0),
+('LN-2026-105', 'Green Horizon Agriculture', 'Personal', 'Retail', 40382, 10.7, 60, '2024-10-23', 583, 56.4, 1, NULL, 'Negative', 'Client has FICO of 583. DTI is 56.4%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.768, 'High', '2026-07-01', 'Default risk is high at 76.8%. Key drivers are FICO credit score of 583 and DTI of 56.4%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.292, "displayValue": "+29.2%"}, {"feature": "DTI Ratio", "value": 0.267, "displayValue": "+26.7%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-106', 'Dr. Arthur Pendelton', 'Business', 'Corporate', 595910, 8.48, 120, '2024-05-24', 714, 35.6, 1, NULL, 'Positive', 'Client has FICO of 714. DTI is 35.6%. Missed payments: 1. Excellent credit discipline, revenues stable.', 'Positive', 'Sector news is positive due to current economic trends.', 'Negative', 0.407, 'Medium', '2026-07-01', 'Default risk is medium at 40.7%. Key drivers are FICO credit score of 714 and DTI of 35.6%.', '[{"feature": "FICO Credit Score", "value": -0.035, "displayValue": "-3.5%"}, {"feature": "DTI Ratio", "value": 0.008, "displayValue": "+0.8%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 0),
+('LN-2026-107', 'Nova Restaurant Group', 'Personal', 'Retail', 57350, 10.69, 36, '2024-07-13', 535, 38.0, 1, NULL, 'Negative', 'Client has FICO of 535. DTI is 38.0%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Neutral', 0.837, 'High', '2026-07-01', 'Default risk is high at 83.7%. Key drivers are FICO credit score of 535 and DTI of 38.0%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.412, "displayValue": "+41.2%"}, {"feature": "DTI Ratio", "value": 0.037, "displayValue": "+3.8%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-108', 'Elite Freight Logistics', 'Personal', 'Retail', 74352, 18.21, 36, '2024-07-06', 720, 61.8, 0, NULL, 'Negative', 'Client has FICO of 720. DTI is 61.8%. Missed payments: 0. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Neutral', 0.727, 'High', '2026-07-01', 'Default risk is high at 72.7%. Key drivers are FICO credit score of 720 and DTI of 61.8%. Crucially, the borrower has missed 0 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": -0.05, "displayValue": "-5.0%"}, {"feature": "DTI Ratio", "value": 0.335, "displayValue": "+33.5%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-109', 'Diana Prince', 'Personal', 'Retail', 5425, 18.22, 36, '2024-03-18', 695, 19.8, 0, NULL, 'Negative', 'Client has FICO of 695. DTI is 19.8%. Missed payments: 0. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.594, 'Medium', '2026-07-01', 'Default risk is medium at 59.4%. Key drivers are FICO credit score of 695 and DTI of 19.8%.', '[{"feature": "FICO Credit Score", "value": 0.013, "displayValue": "+1.2%"}, {"feature": "DTI Ratio", "value": -0.19, "displayValue": "-19.0%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-110', 'Redwood Retailers', 'SME', 'SME', 1406077, 8.94, 60, '2024-02-25', 578, 56.8, 1, NULL, 'Negative', 'Client has FICO of 578. DTI is 56.8%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Negative', 0.835, 'High', '2026-07-01', 'Default risk is high at 83.5%. Key drivers are FICO credit score of 578 and DTI of 56.8%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.305, "displayValue": "+30.5%"}, {"feature": "DTI Ratio", "value": 0.272, "displayValue": "+27.2%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-111', 'David Miller', 'Mortgage', 'Retail', 384628, 7.39, 360, '2024-05-13', 622, 28.0, 2, 90.5, 'Neutral', 'Client has FICO of 622. DTI is 28.0%. Missed payments: 2.', 'Negative', 'Sector news is negative due to current economic trends.', 'Negative', 0.746, 'High', '2026-07-01', 'Default risk is high at 74.6%. Key drivers are FICO credit score of 622 and DTI of 28.0%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.195, "displayValue": "+19.5%"}, {"feature": "DTI Ratio", "value": -0.087, "displayValue": "-8.8%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-112', 'Starlight Media Group', 'Business', 'Corporate', 1068762, 7.11, 120, '2024-12-21', 607, 17.9, 0, NULL, 'Negative', 'Client has FICO of 607. DTI is 17.9%. Missed payments: 0. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Negative', 0.743, 'High', '2026-07-01', 'Default risk is high at 74.3%. Key drivers are FICO credit score of 607 and DTI of 17.9%. Crucially, the borrower has missed 0 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.233, "displayValue": "+23.2%"}, {"feature": "DTI Ratio", "value": -0.214, "displayValue": "-21.4%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-113', 'Robert Chen', 'SME', 'SME', 630125, 11.03, 36, '2024-12-19', 770, 29.9, 0, NULL, 'Neutral', 'Client has FICO of 770. DTI is 29.9%. Missed payments: 0.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.45, 'Medium', '2026-07-01', 'Default risk is medium at 45.0%. Key drivers are FICO credit score of 770 and DTI of 29.9%.', '[{"feature": "FICO Credit Score", "value": -0.175, "displayValue": "-17.5%"}, {"feature": "DTI Ratio", "value": -0.064, "displayValue": "-6.4%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 0),
+('LN-2026-114', 'Summit Builders', 'Personal', 'Retail', 36850, 16.57, 48, '2024-11-04', 548, 15.2, 2, NULL, 'Negative', 'Client has FICO of 548. DTI is 15.2%. Missed payments: 2. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.776, 'High', '2026-07-01', 'Default risk is high at 77.6%. Key drivers are FICO credit score of 548 and DTI of 15.2%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.38, "displayValue": "+38.0%"}, {"feature": "DTI Ratio", "value": -0.247, "displayValue": "-24.8%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-115', 'Emily Watson', 'SME', 'SME', 994358, 10.5, 60, '2024-02-15', 577, 26.2, 3, NULL, 'Negative', 'Client has FICO of 577. DTI is 26.2%. Missed payments: 3. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Neutral', 0.805, 'High', '2026-07-01', 'Default risk is high at 80.5%. Key drivers are FICO credit score of 577 and DTI of 26.2%. Crucially, the borrower has missed 3 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.307, "displayValue": "+30.8%"}, {"feature": "DTI Ratio", "value": -0.11, "displayValue": "-11.0%"}, {"feature": "Missed Payments (12M)", "value": 0.625, "displayValue": "+62.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-116', 'Titan Heavy Industries', 'SME', 'SME', 256091, 11.34, 36, '2024-01-06', 742, 53.2, 0, NULL, 'Positive', 'Client has FICO of 742. DTI is 53.2%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.437, 'Medium', '2026-07-01', 'Default risk is medium at 43.7%. Key drivers are FICO credit score of 742 and DTI of 53.2%.', '[{"feature": "FICO Credit Score", "value": -0.105, "displayValue": "-10.5%"}, {"feature": "DTI Ratio", "value": 0.228, "displayValue": "+22.8%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 0),
+('LN-2026-117', 'Jessica Taylor', 'Personal', 'Retail', 5282, 11.15, 48, '2024-09-22', 700, 53.2, 1, NULL, 'Neutral', 'Client has FICO of 700. DTI is 53.2%. Missed payments: 1.', 'Negative', 'Sector news is negative due to current economic trends.', 'Negative', 0.687, 'High', '2026-07-01', 'Default risk is high at 68.7%. Key drivers are FICO credit score of 700 and DTI of 53.2%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.0, "displayValue": "-0.0%"}, {"feature": "DTI Ratio", "value": 0.228, "displayValue": "+22.8%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 0),
+('LN-2026-118', 'Beacon Web Services', 'Personal', 'Retail', 25289, 11.47, 24, '2024-09-28', 747, 13.2, 0, NULL, 'Positive', 'Client has FICO of 747. DTI is 13.2%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Positive', 'Sector news is positive due to current economic trends.', 'Positive', 0.303, 'Medium', '2026-07-01', 'Default risk is medium at 30.3%. Key drivers are FICO credit score of 747 and DTI of 13.2%.', '[{"feature": "FICO Credit Score", "value": -0.117, "displayValue": "-11.8%"}, {"feature": "DTI Ratio", "value": -0.273, "displayValue": "-27.3%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 0),
+('LN-2026-119', 'Daniel Kim', 'Mortgage', 'Retail', 309642, 7.2, 180, '2024-10-03', 597, 37.9, 2, 83.6, 'Neutral', 'Client has FICO of 597. DTI is 37.9%. Missed payments: 2.', 'Positive', 'Sector news is positive due to current economic trends.', 'Negative', 0.629, 'High', '2026-07-01', 'Default risk is high at 62.9%. Key drivers are FICO credit score of 597 and DTI of 37.9%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.258, "displayValue": "+25.8%"}, {"feature": "DTI Ratio", "value": 0.036, "displayValue": "+3.6%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 1),
+('LN-2026-120', 'Pinnacle Real Estate', 'Personal', 'Retail', 79085, 11.66, 60, '2024-02-01', 566, 21.2, 1, NULL, 'Negative', 'Client has FICO of 566. DTI is 21.2%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Positive', 'Sector news is positive due to current economic trends.', 'Neutral', 0.673, 'High', '2026-07-01', 'Default risk is high at 67.3%. Key drivers are FICO credit score of 566 and DTI of 21.2%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.335, "displayValue": "+33.5%"}, {"feature": "DTI Ratio", "value": -0.173, "displayValue": "-17.2%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 1),
+('LN-2026-121', 'Christopher Davis', 'Personal', 'Retail', 78792, 9.23, 12, '2024-09-23', 554, 37.8, 2, NULL, 'Negative', 'Client has FICO of 554. DTI is 37.8%. Missed payments: 2. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.798, 'High', '2026-07-01', 'Default risk is high at 79.8%. Key drivers are FICO credit score of 554 and DTI of 37.8%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.365, "displayValue": "+36.5%"}, {"feature": "DTI Ratio", "value": 0.035, "displayValue": "+3.5%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-122', 'Quantum Biotech', 'Business', 'Corporate', 1432781, 9.84, 36, '2024-12-18', 691, 28.5, 0, NULL, 'Positive', 'Client has FICO of 691. DTI is 28.5%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.439, 'Medium', '2026-07-01', 'Default risk is medium at 43.9%. Key drivers are FICO credit score of 691 and DTI of 28.5%.', '[{"feature": "FICO Credit Score", "value": 0.022, "displayValue": "+2.2%"}, {"feature": "DTI Ratio", "value": -0.081, "displayValue": "-8.1%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 0),
+('LN-2026-123', 'Thomas Moore', 'Mortgage', 'Retail', 535577, 6.71, 360, '2024-07-27', 763, 30.3, 1, 84.1, 'Negative', 'Client has FICO of 763. DTI is 30.3%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.605, 'High', '2026-07-01', 'Default risk is high at 60.5%. Key drivers are FICO credit score of 763 and DTI of 30.3%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": -0.158, "displayValue": "-15.8%"}, {"feature": "DTI Ratio", "value": -0.059, "displayValue": "-5.9%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-124', 'Vanguard Asset Mgmt', 'Business', 'Corporate', 242456, 8.17, 36, '2024-02-03', 583, 43.7, 1, NULL, 'Negative', 'Client has FICO of 583. DTI is 43.7%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Neutral', 0.82, 'High', '2026-07-01', 'Default risk is high at 82.0%. Key drivers are FICO credit score of 583 and DTI of 43.7%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.292, "displayValue": "+29.2%"}, {"feature": "DTI Ratio", "value": 0.109, "displayValue": "+10.9%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-125', 'Elizabeth White', 'Mortgage', 'Retail', 822092, 7.17, 180, '2024-04-22', 729, 36.6, 0, 75.0, 'Positive', 'Client has FICO of 729. DTI is 36.6%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Positive', 'Sector news is positive due to current economic trends.', 'Neutral', 0.35, 'Medium', '2026-07-01', 'Default risk is medium at 35.0%. Key drivers are FICO credit score of 729 and DTI of 36.6%.', '[{"feature": "FICO Credit Score", "value": -0.072, "displayValue": "-7.2%"}, {"feature": "DTI Ratio", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 1),
+('LN-2026-126', 'Cascade Distributors', 'SME', 'SME', 891717, 11.37, 120, '2024-06-26', 741, 22.0, 0, NULL, 'Positive', 'Client has FICO of 741. DTI is 22.0%. Missed payments: 0. Excellent credit discipline, revenues stable.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.388, 'Medium', '2026-07-01', 'Default risk is medium at 38.8%. Key drivers are FICO credit score of 741 and DTI of 22.0%.', '[{"feature": "FICO Credit Score", "value": -0.102, "displayValue": "-10.2%"}, {"feature": "DTI Ratio", "value": -0.163, "displayValue": "-16.2%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": -0.18, "displayValue": "-18.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-127', 'Paul Anderson', 'Personal', 'Retail', 37527, 10.09, 36, '2024-08-12', 679, 15.9, 0, NULL, 'Neutral', 'Client has FICO of 679. DTI is 15.9%. Missed payments: 0.', 'Positive', 'Sector news is positive due to current economic trends.', 'Positive', 0.428, 'Medium', '2026-07-01', 'Default risk is medium at 42.8%. Key drivers are FICO credit score of 679 and DTI of 15.9%.', '[{"feature": "FICO Credit Score", "value": 0.052, "displayValue": "+5.2%"}, {"feature": "DTI Ratio", "value": -0.239, "displayValue": "-23.9%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', 0),
+('LN-2026-128', 'Blue Sky Travel LLC', 'Business', 'Corporate', 627302, 6.62, 48, '2024-09-11', 599, 32.9, 1, NULL, 'Negative', 'Client has FICO of 599. DTI is 32.9%. Missed payments: 1. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Neutral', 0.8, 'High', '2026-07-01', 'Default risk is high at 80.0%. Key drivers are FICO credit score of 599 and DTI of 32.9%. Crucially, the borrower has missed 1 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.253, "displayValue": "+25.2%"}, {"feature": "DTI Ratio", "value": -0.026, "displayValue": "-2.6%"}, {"feature": "Missed Payments (12M)", "value": 0.125, "displayValue": "+12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', 1),
+('LN-2026-129', 'Karen Taylor', 'SME', 'SME', 391889, 7.39, 60, '2024-09-04', 617, 16.7, 2, NULL, 'Neutral', 'Client has FICO of 617. DTI is 16.7%. Missed payments: 2.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Neutral', 0.651, 'High', '2026-07-01', 'Default risk is high at 65.1%. Key drivers are FICO credit score of 617 and DTI of 16.7%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.207, "displayValue": "+20.8%"}, {"feature": "DTI Ratio", "value": -0.229, "displayValue": "-22.9%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', 1),
+('LN-2026-130', 'NextGen Robotics', 'Personal', 'Retail', 29914, 8.94, 36, '2024-11-11', 611, 10.1, 0, NULL, 'Neutral', 'Client has FICO of 611. DTI is 10.1%. Missed payments: 0.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.549, 'Medium', '2026-07-01', 'Default risk is medium at 54.9%. Key drivers are FICO credit score of 611 and DTI of 10.1%.', '[{"feature": "FICO Credit Score", "value": 0.223, "displayValue": "+22.2%"}, {"feature": "DTI Ratio", "value": -0.311, "displayValue": "-31.1%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', NULL),
+('LN-2026-131', 'Michael Thomas', 'Business', 'Corporate', 1541224, 10.1, 36, '2024-04-14', 626, 37.8, 2, NULL, 'Negative', 'Client has FICO of 626. DTI is 37.8%. Missed payments: 2. Slow repayments, cash flow issues noted.', 'Negative', 'Sector news is negative due to current economic trends.', 'Negative', 0.822, 'High', '2026-07-01', 'Default risk is high at 82.2%. Key drivers are FICO credit score of 626 and DTI of 37.8%. Crucially, the borrower has missed 2 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.185, "displayValue": "+18.5%"}, {"feature": "DTI Ratio", "value": 0.035, "displayValue": "+3.5%"}, {"feature": "Missed Payments (12M)", "value": 0.375, "displayValue": "+37.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.25, "displayValue": "+25.0%"}]', NULL),
+('LN-2026-132', 'First Class Catering', 'Personal', 'Retail', 27810, 14.19, 60, '2024-07-26', 603, 40.1, 0, NULL, 'Neutral', 'Client has FICO of 603. DTI is 40.1%. Missed payments: 0.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Positive', 0.604, 'High', '2026-07-01', 'Default risk is high at 60.4%. Key drivers are FICO credit score of 603 and DTI of 40.1%. Crucially, the borrower has missed 0 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.242, "displayValue": "+24.2%"}, {"feature": "DTI Ratio", "value": 0.064, "displayValue": "+6.4%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.02, "displayValue": "+2.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', NULL),
+('LN-2026-133', 'Ashley Jackson', 'Business', 'Corporate', 1125150, 8.71, 120, '2024-02-27', 604, 38.0, 0, NULL, 'Negative', 'Client has FICO of 604. DTI is 38.0%. Missed payments: 0. Slow repayments, cash flow issues noted.', 'Positive', 'Sector news is positive due to current economic trends.', 'Neutral', 0.624, 'High', '2026-07-01', 'Default risk is high at 62.4%. Key drivers are FICO credit score of 604 and DTI of 38.0%. Crucially, the borrower has missed 0 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.24, "displayValue": "+24.0%"}, {"feature": "DTI Ratio", "value": 0.037, "displayValue": "+3.8%"}, {"feature": "Missed Payments (12M)", "value": -0.125, "displayValue": "-12.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": -0.18, "displayValue": "-18.0%"}]', NULL),
+('LN-2026-134', 'Aero Components Inc.', 'Mortgage', 'Retail', 575498, 7.11, 180, '2024-12-23', 617, 20.7, 3, 68.6, 'Negative', 'Client has FICO of 617. DTI is 20.7%. Missed payments: 3. Slow repayments, cash flow issues noted.', 'Neutral', 'Sector news is neutral due to current economic trends.', 'Negative', 0.777, 'High', '2026-07-01', 'Default risk is high at 77.7%. Key drivers are FICO credit score of 617 and DTI of 20.7%. Crucially, the borrower has missed 3 payments in the last 12 months and loan officer sentiment is negative.', '[{"feature": "FICO Credit Score", "value": 0.207, "displayValue": "+20.8%"}, {"feature": "DTI Ratio", "value": -0.179, "displayValue": "-17.9%"}, {"feature": "Missed Payments (12M)", "value": 0.625, "displayValue": "+62.5%"}, {"feature": "Loan Officer Notes Sentiment", "value": 0.25, "displayValue": "+25.0%"}, {"feature": "Sector News Sentiment Index", "value": 0.02, "displayValue": "+2.0%"}]', NULL);

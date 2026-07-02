@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
-import type { Loan } from '../data/mockLoans';
+import React, { useState, useMemo, useEffect } from 'react';
+import type { Loan } from '../services/api';
+import { getLoans, submitNewApplication } from '../services/api';
 import { mockLoans } from '../data/mockLoans';
-import { Search, Filter, ChevronRight, X } from 'lucide-react';
+import { Search, Filter, ChevronRight, X, PlusCircle, Loader2 } from 'lucide-react';
 import { Customer360Details } from './Customer360Details';
 
 interface ApplicationTrackerProps {
@@ -15,10 +16,61 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
   selectedLoanId,
   onSelectLoan,
   initialFilter = 'ALL',
+  apiOnline,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loanTypeFilter, setLoanTypeFilter] = useState('ALL');
   const [riskTierFilter, setRiskTierFilter] = useState(initialFilter);
+  
+  // Ingestion form state
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Form fields
+  const [borrowerName, setBorrowerName] = useState('');
+  const [loanType, setLoanType] = useState('SME');
+  const [borrowerSegment, setBorrowerSegment] = useState('SME');
+  const [amount, setAmount] = useState('250000');
+  const [interestRate, setInterestRate] = useState('8.5');
+  const [termMonths, setTermMonths] = useState('60');
+  const [ficoScore, setFicoScore] = useState('710');
+  const [dti, setDti] = useState('32.5');
+  const [missedPayments12M, setMissedPayments12M] = useState('0');
+  const [ltv, setLtv] = useState('75');
+  const [officerNotesSentiment, setOfficerNotesSentiment] = useState<'Positive' | 'Neutral' | 'Negative'>('Positive');
+  const [officerNotesSummary, setOfficerNotesSummary] = useState('');
+  const [sectorNewsSentiment, setSectorNewsSentiment] = useState<'Positive' | 'Neutral' | 'Negative'>('Neutral');
+  const [sectorNewsSummary, setSectorNewsSummary] = useState('');
+  const [communicationSentiment, setCommunicationSentiment] = useState<'Positive' | 'Neutral' | 'Negative'>('Positive');
+
+  // Live loans state
+  const [liveLoans, setLiveLoans] = useState<Loan[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Load loans from API/Database or fallback
+  useEffect(() => {
+    if (apiOnline) {
+      setIsLoading(true);
+      getLoans()
+        .then((data) => {
+          setLiveLoans(data.loans);
+          setIsLoading(false);
+        })
+        .catch((err) => {
+          console.error('[Application Tracker] Error fetching loans:', err);
+          setIsLoading(false);
+        });
+    } else {
+      setLiveLoans([]);
+    }
+  }, [apiOnline, refreshTrigger]);
+
+  // Resolved list of loans (live API data or local fallback)
+  const resolvedLoans = useMemo(() => {
+    return liveLoans.length > 0 ? liveLoans : (mockLoans as unknown as Loan[]);
+  }, [liveLoans]);
 
   // Formatting helpers
   const formatCurrency = (val: number) => {
@@ -31,7 +83,7 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
 
   // Filtered Loans
   const filteredLoans = useMemo(() => {
-    return mockLoans.filter((loan) => {
+    return resolvedLoans.filter((loan) => {
       // 1. Search term match
       const matchesSearch = 
         loan.borrowerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -50,12 +102,57 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
 
       return matchesSearch && matchesType && matchesRisk;
     });
-  }, [searchTerm, loanTypeFilter, riskTierFilter]);
+  }, [resolvedLoans, searchTerm, loanTypeFilter, riskTierFilter]);
 
   // Find currently selected loan object
-  const selectedLoan: Loan | null = useMemo(() => {
-    return mockLoans.find((l) => l.id === selectedLoanId) || null;
-  }, [selectedLoanId]);
+  const selectedLoan = useMemo(() => {
+    return resolvedLoans.find((l) => l.id === selectedLoanId) || null;
+  }, [resolvedLoans, selectedLoanId]);
+
+  // Handle new loan application submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!borrowerName || !officerNotesSummary) {
+      setFormError('Please fill out all required fields.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormError(null);
+
+    const payload = {
+      borrowerName,
+      loanType,
+      borrowerSegment,
+      amount: Number(amount),
+      interestRate: Number(interestRate),
+      termMonths: Number(termMonths),
+      ficoScore: Number(ficoScore),
+      dti: Number(dti),
+      missedPayments12M: Number(missedPayments12M),
+      ltv: loanType === 'Mortgage' ? Number(ltv) : null,
+      officerNotesSentiment,
+      officerNotesSummary,
+      sectorNewsSentiment,
+      sectorNewsSummary: sectorNewsSummary || `Sector indicators show ${sectorNewsSentiment.toLowerCase()} trend.`,
+      communicationSentiment,
+    };
+
+    try {
+      await submitNewApplication(payload);
+      setRefreshTrigger((prev) => prev + 1); // reload loans list
+      setIsFormOpen(false);
+      
+      // Reset form
+      setBorrowerName('');
+      setOfficerNotesSummary('');
+      setSectorNewsSummary('');
+    } catch (err: any) {
+      setFormError(err.message || 'Ingestion failed. Please check backend connection.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -69,6 +166,13 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
             Analyze credit files and default probabilities forecasted 12 months in advance.
           </p>
         </div>
+        <button
+          onClick={() => setIsFormOpen(true)}
+          className="mt-4 md:mt-0 flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors"
+        >
+          <PlusCircle className="h-4 w-4" />
+          Ingest Application
+        </button>
       </div>
 
       {/* Main Split Layout */}
@@ -135,7 +239,12 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
             </div>
 
             {/* Loans Datagrid */}
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto relative">
+              {isLoading && (
+                <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10">
+                  <Loader2 className="h-8 w-8 text-brand-accent animate-spin" />
+                </div>
+              )}
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-zinc-50 border-b border-zinc-100 text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -169,7 +278,16 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
                             {loan.id}
                           </td>
                           <td className="py-4 px-4 font-bold text-zinc-950">
-                            {loan.borrowerName}
+                            <div className="flex items-center gap-2">
+                              {loan.borrowerName}
+                              {loan.actualDefault !== undefined && loan.actualDefault !== null && (
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider ${
+                                  loan.actualDefault === 1 ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                                }`}>
+                                  {loan.actualDefault === 1 ? 'Defaulted' : 'Repaid'}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-4 px-4 text-zinc-600">
                             <span className="text-[10px] font-mono border border-zinc-200 rounded px-1.5 py-0.5 bg-zinc-50 font-semibold mr-1.5">
@@ -185,7 +303,6 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
                           </td>
                           <td className="py-4 px-4">
                             <div className="flex items-center gap-2">
-                              {/* Mono-colored or highly-minimal visual progress bar */}
                               <div className="w-16 bg-zinc-100 h-2 rounded-full overflow-hidden">
                                 <div 
                                   className={`h-full rounded-full ${
@@ -215,13 +332,9 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
               </table>
             </div>
 
-            {/* Pagination / Table Summary */}
+            {/* Table Summary */}
             <div className="p-4 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-400 bg-zinc-50/10">
-              <span className="font-mono">Showing {filteredLoans.length} of {mockLoans.length} portfolio accounts</span>
-              <div className="flex items-center gap-2">
-                <button className="px-2.5 py-1 border border-zinc-200 rounded bg-white hover:bg-zinc-50 disabled:opacity-50" disabled>Prev</button>
-                <button className="px-2.5 py-1 border border-zinc-200 rounded bg-white hover:bg-zinc-50 disabled:opacity-50" disabled>Next</button>
-              </div>
+              <span className="font-mono">Showing {filteredLoans.length} of {resolvedLoans.length} active credit files</span>
             </div>
 
           </div>
@@ -248,12 +361,297 @@ export const ApplicationTracker: React.FC<ApplicationTrackerProps> = ({
             <div className="max-h-[750px] overflow-y-auto">
               <Customer360Details 
                 loan={selectedLoan} 
+                onUpdate={() => setRefreshTrigger((prev) => prev + 1)}
               />
             </div>
           </div>
         )}
 
       </div>
+
+      {/* Ingest Application Modal */}
+      {isFormOpen && (
+        <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white border border-zinc-200 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto premium-shadow flex flex-col animate-scaleUp">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-zinc-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-extrabold text-zinc-900">New Credit Application Ingestion</h2>
+                <p className="text-xs text-zinc-500 mt-0.5">Ingest files to evaluate default probabilities using the hybrid predictive engine.</p>
+              </div>
+              <button 
+                onClick={() => setIsFormOpen(false)}
+                className="p-1 hover:bg-zinc-100 rounded-full transition-colors"
+                title="Close Modal"
+              >
+                <X className="h-4 w-4 text-zinc-500" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+              {formError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg p-3.5 font-medium">
+                  {formError}
+                </div>
+              )}
+
+              {/* Section 1: Structured Demographics */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-1">
+                  1. Structured Credit Metrics
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Borrower Name *</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Acme Corporation"
+                      value={borrowerName}
+                      onChange={(e) => setBorrowerName(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                      required
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Loan Type</label>
+                      <select
+                        value={loanType}
+                        onChange={(e) => setLoanType(e.target.value)}
+                        className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950 cursor-pointer"
+                      >
+                        <option value="SME">SME</option>
+                        <option value="Mortgage">Mortgage</option>
+                        <option value="Business">Business</option>
+                        <option value="Personal">Personal</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Segment</label>
+                      <select
+                        value={borrowerSegment}
+                        onChange={(e) => setBorrowerSegment(e.target.value)}
+                        className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950 cursor-pointer"
+                      >
+                        <option value="SME">SME</option>
+                        <option value="Retail">Retail</option>
+                        <option value="Corporate">Corporate</option>
+                        <option value="HNW">HNW</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Amount ($) *</label>
+                    <input
+                      type="number"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Interest Rate (%)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={interestRate}
+                      onChange={(e) => setInterestRate(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Term (Months)</label>
+                    <input
+                      type="number"
+                      value={termMonths}
+                      onChange={(e) => setTermMonths(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">FICO Score</label>
+                    <input
+                      type="number"
+                      min="300"
+                      max="850"
+                      value={ficoScore}
+                      onChange={(e) => setFicoScore(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">DTI Ratio (%)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={dti}
+                      onChange={(e) => setDti(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Missed Payments (12M)</label>
+                    <select
+                      value={missedPayments12M}
+                      onChange={(e) => setMissedPayments12M(e.target.value)}
+                      className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950 cursor-pointer"
+                    >
+                      <option value="0">0 Missed</option>
+                      <option value="1">1 Missed</option>
+                      <option value="2">2 Missed</option>
+                      <option value="3">3 Missed</option>
+                      <option value="4">4+ Missed</option>
+                    </select>
+                  </div>
+                  {loanType === 'Mortgage' && (
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">LTV Ratio (%)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={ltv}
+                        onChange={(e) => setLtv(e.target.value)}
+                        className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Section 2: Unstructured Data Narrative fusions */}
+              <div className="space-y-4 pt-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-1">
+                  2. Unstructured Narratives & Sentiment Fusions
+                </h3>
+                <div className="space-y-4">
+                  
+                  {/* Notes & Sentiment */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Loan Officer Notes Summary *</label>
+                      <textarea
+                        rows={3}
+                        placeholder="e.g. Borrower operates retail locations. Strong historical compliance, but inventory turnover declined..."
+                        value={officerNotesSummary}
+                        onChange={(e) => setOfficerNotesSummary(e.target.value)}
+                        className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950 resize-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Officer Notes Sentiment</label>
+                      <div className="flex flex-col gap-1.5 mt-1 text-xs">
+                        {['Positive', 'Neutral', 'Negative'].map((sent) => (
+                          <label key={sent} className="flex items-center gap-2 cursor-pointer font-medium text-zinc-700">
+                            <input
+                              type="radio"
+                              name="notes_sent"
+                              value={sent}
+                              checked={officerNotesSentiment === sent}
+                              onChange={() => setOfficerNotesSentiment(sent as any)}
+                              className="text-zinc-950 focus:ring-zinc-950"
+                            />
+                            {sent}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* News Summary & Sentiment */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Macro/Sector News Indicators</label>
+                      <textarea
+                        rows={2}
+                        placeholder="e.g. Tariffs impact domestic manufacturing, sector contracts slightly..."
+                        value={sectorNewsSummary}
+                        onChange={(e) => setSectorNewsSummary(e.target.value)}
+                        className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950 resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-700 block mb-1">Sector News Sentiment</label>
+                      <div className="flex flex-col gap-1.5 mt-1 text-xs">
+                        {['Positive', 'Neutral', 'Negative'].map((sent) => (
+                          <label key={sent} className="flex items-center gap-2 cursor-pointer font-medium text-zinc-700">
+                            <input
+                              type="radio"
+                              name="news_sent"
+                              value={sent}
+                              checked={sectorNewsSentiment === sent}
+                              onChange={() => setSectorNewsSentiment(sent as any)}
+                              className="text-zinc-950 focus:ring-zinc-950"
+                            />
+                            {sent}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Communications Sentiment */}
+                  <div>
+                    <label className="text-xs font-bold text-zinc-700 block mb-1">Borrower Communications Channel Sentiment</label>
+                    <div className="flex gap-6 mt-1 text-xs">
+                      {['Positive', 'Neutral', 'Negative'].map((sent) => (
+                        <label key={sent} className="flex items-center gap-2 cursor-pointer font-medium text-zinc-700">
+                          <input
+                            type="radio"
+                            name="comm_sent"
+                            value={sent}
+                            checked={communicationSentiment === sent}
+                            onChange={() => setCommunicationSentiment(sent as any)}
+                            className="text-zinc-950 focus:ring-zinc-950"
+                          />
+                          {sent}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Submit Buttons */}
+              <div className="flex items-center justify-end gap-3 border-t border-zinc-100 pt-5">
+                <button
+                  type="button"
+                  onClick={() => setIsFormOpen(false)}
+                  className="px-4 py-2 border border-zinc-200 text-zinc-700 rounded-lg text-xs font-bold hover:bg-zinc-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex items-center gap-1.5 px-5 py-2 bg-zinc-950 text-white rounded-lg text-xs font-bold hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Evaluating...
+                    </>
+                  ) : (
+                    'Ingest & Evaluate Risk'
+                  )}
+                </button>
+              </div>
+
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

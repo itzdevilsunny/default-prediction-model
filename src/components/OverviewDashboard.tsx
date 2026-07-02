@@ -39,30 +39,8 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({ onViewLoan
       }
     : mockPortfolioSummary;
 
-  const resolvedLoans = liveLoans
-    ? liveLoans.map(l => ({
-        id: l.id,
-        borrowerName: l.borrower_name,
-        loanType: l.loan_type,
-        borrowerSegment: l.borrower_segment,
-        amount: l.amount,
-        interestRate: l.interest_rate,
-        termMonths: l.term_months,
-        startDate: l.start_date,
-        ficoScore: l.fico_score,
-        dti: l.dti,
-        missedPayments12M: l.missed_payments_12m,
-        officerNotesSentiment: l.officer_notes_sentiment as any,
-        officerNotesSummary: l.officer_notes_summary,
-        sectorNewsSentiment: l.sector_news_sentiment as any,
-        sectorNewsSummary: l.sector_news_summary,
-        communicationSentiment: l.communication_sentiment as any,
-        defaultProbability12M: l.default_probability_12m,
-        riskTier: l.risk_tier as any,
-        lastUpdated: l.last_updated,
-        aiRiskSummary: l.ai_risk_summary,
-        shapValues: [],
-      }))
+  const resolvedLoans = liveLoans && liveLoans.length > 0
+    ? liveLoans
     : mockLoans;
 
   // Stats calculation

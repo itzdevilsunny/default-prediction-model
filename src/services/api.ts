@@ -16,28 +16,36 @@ const FALLBACK_API = import.meta.env.VITE_API_FALLBACK || 'https://default-predi
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export interface ShapValue {
+  feature: string;
+  value: number; // positive means increases default risk, negative means decreases default risk
+  displayValue: string;
+}
+
 export interface Loan {
   id: string;
-  borrower_name: string;
-  loan_type: string;
-  borrower_segment: string;
+  borrowerName: string;
+  loanType: 'SME' | 'Mortgage' | 'Personal' | 'Business' | 'Auto';
+  borrowerSegment: 'SME' | 'Retail' | 'Corporate' | 'HNW';
   amount: number;
-  interest_rate: number;
-  term_months: number;
-  start_date: string;
-  fico_score: number;
+  interestRate: number;
+  termMonths: number;
+  startDate: string;
+  ficoScore: number;
   dti: number;
-  missed_payments_12m: number;
+  missedPayments12M: number;
   ltv?: number;
-  officer_notes_sentiment: string;
-  officer_notes_summary: string;
-  sector_news_sentiment: string;
-  sector_news_summary: string;
-  communication_sentiment: string;
-  default_probability_12m: number;
-  risk_tier: 'Low' | 'Medium' | 'High';
-  last_updated: string;
-  ai_risk_summary: string;
+  officerNotesSentiment: 'Positive' | 'Neutral' | 'Negative';
+  officerNotesSummary: string;
+  sectorNewsSentiment: 'Positive' | 'Neutral' | 'Negative';
+  sectorNewsSummary: string;
+  communicationSentiment: 'Positive' | 'Neutral' | 'Negative';
+  defaultProbability12M: number;
+  riskTier: 'Low' | 'Medium' | 'High';
+  lastUpdated: string;
+  aiRiskSummary: string;
+  shapExplanations: ShapValue[];
+  actualDefault?: number | null; // 0=Repaid, 1=Defaulted, null=Active
 }
 
 export interface PortfolioSummary {
@@ -85,11 +93,42 @@ export interface ApiStatus {
   error?: string;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Maps backend DbLoan schema to frontend Loan camelCase keys. */
+export function mapDbLoanToLoan(dbLoan: any): Loan {
+  if (!dbLoan) return dbLoan;
+  return {
+    id: dbLoan.id,
+    borrowerName: dbLoan.borrower_name,
+    loanType: dbLoan.loan_type,
+    borrowerSegment: dbLoan.borrower_segment,
+    amount: Number(dbLoan.amount),
+    interestRate: Number(dbLoan.interest_rate),
+    termMonths: Number(dbLoan.term_months),
+    startDate: dbLoan.start_date,
+    ficoScore: Number(dbLoan.fico_score),
+    dti: Number(dbLoan.dti),
+    missedPayments12M: Number(dbLoan.missed_payments_12m),
+    ltv: dbLoan.ltv !== null ? Number(dbLoan.ltv) : undefined,
+    officerNotesSentiment: dbLoan.officer_notes_sentiment,
+    officerNotesSummary: dbLoan.officer_notes_summary,
+    sectorNewsSentiment: dbLoan.sector_news_sentiment,
+    sectorNewsSummary: dbLoan.sector_news_summary,
+    communicationSentiment: dbLoan.communication_sentiment,
+    defaultProbability12M: Number(dbLoan.default_probability_12m),
+    riskTier: dbLoan.risk_tier,
+    lastUpdated: dbLoan.last_updated,
+    aiRiskSummary: dbLoan.ai_risk_summary,
+    shapExplanations: dbLoan.shap_explanations || [],
+    actualDefault: dbLoan.actual_default,
+  };
+}
+
 // ─── API Status Check ─────────────────────────────────────────────────────────
 
 /** Check connectivity — tries Supabase first, then Render, then offline. */
 export async function checkApiStatus(): Promise<ApiStatus> {
-  // 1. Try Supabase direct connection
   try {
     await fetchPortfolioSummaryFromDb();
     return { online: true, url: 'Supabase', source: 'supabase' };
@@ -97,7 +136,6 @@ export async function checkApiStatus(): Promise<ApiStatus> {
     // Supabase unavailable, try Render
   }
 
-  // 2. Try Render backend
   for (const base of [PRIMARY_API, FALLBACK_API]) {
     try {
       const res = await fetch(`${base}/`, { signal: AbortSignal.timeout(10000) });
@@ -119,7 +157,6 @@ export async function checkApiStatus(): Promise<ApiStatus> {
 
 /** Gets portfolio summary — Supabase first, Render fallback. */
 export async function getPortfolioSummary(): Promise<PortfolioSummary> {
-  // Try Supabase direct
   try {
     const summary = await fetchPortfolioSummaryFromDb();
     if (summary) return summary as PortfolioSummary;
@@ -127,7 +164,6 @@ export async function getPortfolioSummary(): Promise<PortfolioSummary> {
     // fall through
   }
 
-  // Try Render backend
   for (const base of [PRIMARY_API, FALLBACK_API]) {
     try {
       const res = await fetch(`${base}/api/portfolio/summary`, { signal: AbortSignal.timeout(15000) });
@@ -146,15 +182,14 @@ export async function getLoans(params?: {
   loan_type?: string;
   search?: string;
 }): Promise<{ loans: Loan[]; total: number }> {
-  // Try Supabase direct
   try {
-    const loans = await fetchLoansFromDb(params) as Loan[];
+    const dbLoans = await fetchLoansFromDb(params);
+    const loans = dbLoans.map(mapDbLoanToLoan);
     return { loans, total: loans.length };
   } catch {
     // fall through to Render
   }
 
-  // Try Render backend
   const qs = new URLSearchParams();
   if (params?.risk_tier && params.risk_tier !== 'ALL') qs.set('risk_tier', params.risk_tier);
   if (params?.loan_type && params.loan_type !== 'ALL') qs.set('loan_type', params.loan_type);
@@ -164,7 +199,13 @@ export async function getLoans(params?: {
   for (const base of [PRIMARY_API, FALLBACK_API]) {
     try {
       const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
-      if (res.ok) return res.json();
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          loans: (data.loans || []).map(mapDbLoanToLoan),
+          total: data.total || 0,
+        };
+      }
     } catch { /* continue */ }
   }
 
@@ -173,37 +214,76 @@ export async function getLoans(params?: {
 
 /** Get a single loan — Supabase first, Render fallback. */
 export async function getLoan(loanId: string): Promise<Loan> {
-  // Try Supabase direct
   try {
-    const loan = await fetchLoanByIdFromDb(loanId) as Loan | null;
-    if (loan) return loan;
+    const loan = await fetchLoanByIdFromDb(loanId);
+    if (loan) return mapDbLoanToLoan(loan);
   } catch {
     // fall through
   }
 
-  // Try Render
   for (const base of [PRIMARY_API, FALLBACK_API]) {
     try {
       const res = await fetch(`${base}/api/loans/${loanId}`, { signal: AbortSignal.timeout(15000) });
-      if (res.ok) return res.json();
+      if (res.ok) {
+        const dbLoan = await res.json();
+        return mapDbLoanToLoan(dbLoan);
+      }
     } catch { /* continue */ }
   }
 
   throw new Error(`Loan ${loanId} not found`);
 }
 
-// ─── Audit Logs ───────────────────────────────────────────────────────────────
+/** Submit a new loan application. */
+export async function submitNewApplication(loanData: any): Promise<Loan> {
+  // Always submit through FastAPI backend since it runs the python ML model predictions
+  for (const base of [PRIMARY_API, FALLBACK_API]) {
+    try {
+      // Map to snake_case for the FastAPI model
+      const backendData = {
+        borrower_name: loanData.borrowerName,
+        loan_type: loanData.loanType,
+        borrower_segment: loanData.borrowerSegment,
+        amount: Number(loanData.amount),
+        interest_rate: Number(loanData.interestRate),
+        term_months: Number(loanData.termMonths),
+        fico_score: Number(loanData.ficoScore),
+        dti: Number(loanData.dti),
+        missed_payments_12m: Number(loanData.missedPayments12M),
+        ltv: loanData.ltv ? Number(loanData.ltv) : null,
+        officer_notes_sentiment: loanData.officerNotesSentiment,
+        officer_notes_summary: loanData.officerNotesSummary,
+        sector_news_sentiment: loanData.sectorNewsSentiment,
+        sector_news_summary: loanData.sectorNewsSummary,
+        communication_sentiment: loanData.communicationSentiment
+      };
+
+      const res = await fetch(`${base}/api/loans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backendData),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (res.ok) {
+        const createdDbLoan = await res.json();
+        return mapDbLoanToLoan(createdDbLoan);
+      }
+    } catch (e) {
+      console.warn(`[API] submitNewApplication failed on ${base}:`, e);
+    }
+  }
+  throw new Error('New application ingestion failed on all backend API endpoints');
+}
 
 /** Submit audit override — writes to Supabase directly. */
 export async function submitAudit(loanId: string, entry: AuditEntry) {
-  // 1. Update loan risk_tier in Supabase
   try {
     await updateLoanRiskTier(loanId, entry.risk_override);
   } catch (e) {
     console.warn('Could not update risk tier in Supabase:', e);
   }
 
-  // 2. Insert audit log record in Supabase
   try {
     const log = await insertAuditLog({
       loan_id: entry.loan_id,
@@ -215,11 +295,10 @@ export async function submitAudit(loanId: string, entry: AuditEntry) {
     return {
       success: true,
       audit_id: log.id,
-      message: `Audit logged for Loan ${loanId}. Risk overridden to ${entry.risk_override}.`,
+      message: `Audit logged for Loan ${loanId}. Risk overridden to {entry.risk_override}.`,
       timestamp: log.created_at,
     };
   } catch {
-    // Supabase failed, fall back to Render backend
     for (const base of [PRIMARY_API, FALLBACK_API]) {
       try {
         const res = await fetch(`${base}/api/loans/${loanId}/audit`, {
@@ -233,6 +312,24 @@ export async function submitAudit(loanId: string, entry: AuditEntry) {
     }
     throw new Error('Audit submission failed on all backends');
   }
+}
+
+/** Submit loan actual outcome resolution (0=Repaid, 1=Defaulted). */
+export async function submitLoanOutcome(loanId: string, actualDefault: number): Promise<boolean> {
+  for (const base of [PRIMARY_API, FALLBACK_API]) {
+    try {
+      const res = await fetch(`${base}/api/loans/${loanId}/outcome`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actual_default: actualDefault }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn(`[API] submitLoanOutcome failed on ${base}:`, e);
+    }
+  }
+  return false;
 }
 
 /** Fetch all audit logs. */
@@ -250,6 +347,22 @@ export async function getAuditLogs(loanId?: string) {
     }
     return { audits: [], total: 0 };
   }
+}
+
+/** Retrain model pipeline. */
+export async function retrainModel(): Promise<boolean> {
+  for (const base of [PRIMARY_API, FALLBACK_API]) {
+    try {
+      const res = await fetch(`${base}/api/model/train`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(30000) // 30s timeout for model training
+      });
+      if (res.ok) return true;
+    } catch (e) {
+      console.warn(`[API] Model retraining failed on ${base}:`, e);
+    }
+  }
+  return false;
 }
 
 /** Get model metrics — from Render backend. */
