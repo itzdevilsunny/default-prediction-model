@@ -46,6 +46,13 @@ export interface Loan {
   aiRiskSummary: string;
   shapExplanations: ShapValue[];
   actualDefault?: number | null; // 0=Repaid, 1=Defaulted, null=Active
+  
+  // Decisioning & Pricing Engine
+  decisionStatus: 'APPROVED' | 'REJECTED' | 'REFER';
+  recommendedApr: number;
+  recommendedLimit: number;
+  baseRate: number;
+  riskPremium: number;
 }
 
 export interface PortfolioSummary {
@@ -105,16 +112,33 @@ export interface ApiStatus {
 /** Maps backend DbLoan schema to frontend Loan camelCase keys. */
 export function mapDbLoanToLoan(dbLoan: any): Loan {
   if (!dbLoan) return dbLoan;
+  
+  const defaultProb = Number(dbLoan.default_probability_12m || 0.15);
+  const fico = Number(dbLoan.fico_score || 700);
+  const amount = Number(dbLoan.amount || 250000);
+  const interestRate = Number(dbLoan.interest_rate || 7.0);
+
+  // Compute local defaults if backend is still deploying
+  const decisionStatus = dbLoan.decision_status || 
+    (defaultProb >= 0.60 ? 'REJECTED' : defaultProb < 0.15 ? 'APPROVED' : 'REFER');
+  
+  const baseRate = dbLoan.base_rate !== undefined ? Number(dbLoan.base_rate) : interestRate;
+  const riskPremium = dbLoan.risk_premium !== undefined ? Number(dbLoan.risk_premium) : roundToTwo(defaultProb * 12.0);
+  const recommendedApr = dbLoan.recommended_apr !== undefined ? Number(dbLoan.recommended_apr) : roundToTwo(baseRate + riskPremium);
+  
+  const recommendedLimit = dbLoan.recommended_limit !== undefined ? Number(dbLoan.recommended_limit) : 
+    (decisionStatus === 'REJECTED' ? 0.0 : roundToTwo(amount * (1.0 - defaultProb) * (fico / 850.0)));
+
   return {
     id: dbLoan.id,
     borrowerName: dbLoan.borrower_name,
     loanType: dbLoan.loan_type,
     borrowerSegment: dbLoan.borrower_segment,
-    amount: Number(dbLoan.amount),
-    interestRate: Number(dbLoan.interest_rate),
+    amount: amount,
+    interestRate: interestRate,
     termMonths: Number(dbLoan.term_months),
     startDate: dbLoan.start_date,
-    ficoScore: Number(dbLoan.fico_score),
+    ficoScore: fico,
     dti: Number(dbLoan.dti),
     missedPayments12M: Number(dbLoan.missed_payments_12m),
     ltv: dbLoan.ltv !== null ? Number(dbLoan.ltv) : undefined,
@@ -123,13 +147,24 @@ export function mapDbLoanToLoan(dbLoan: any): Loan {
     sectorNewsSentiment: dbLoan.sector_news_sentiment,
     sectorNewsSummary: dbLoan.sector_news_summary,
     communicationSentiment: dbLoan.communication_sentiment,
-    defaultProbability12M: Number(dbLoan.default_probability_12m),
+    defaultProbability12M: defaultProb,
     riskTier: dbLoan.risk_tier,
     lastUpdated: dbLoan.last_updated,
     aiRiskSummary: dbLoan.ai_risk_summary,
     shapExplanations: dbLoan.shap_explanations || [],
     actualDefault: dbLoan.actual_default,
+    
+    // Injected Pricing Variables
+    decisionStatus,
+    recommendedApr,
+    recommendedLimit,
+    baseRate,
+    riskPremium
   };
+}
+
+function roundToTwo(num: number): number {
+  return Math.round((num + Number.EPSILON) * 100) / 100;
 }
 
 // ─── API Status Check ─────────────────────────────────────────────────────────

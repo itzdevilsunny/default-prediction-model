@@ -78,6 +78,61 @@ def health_check():
         "timestamp": datetime.datetime.utcnow().isoformat()
     }
 
+# ─── Decisioning & Pricing Engine ─────────────────────────────────────────────
+
+BASE_RATES = {
+    "SME": 5.5,
+    "Mortgage": 6.0,
+    "Business": 7.0,
+    "Personal": 8.0
+}
+
+def inject_decision_engine(loan: dict) -> dict:
+    fico = float(loan.get("fico_score", 700))
+    amount = float(loan.get("amount", 250000))
+    default_prob = float(loan.get("default_probability_12m", 0.15))
+    loan_type = loan.get("loan_type", "SME")
+
+    base_rate = BASE_RATES.get(loan_type, 7.0)
+    
+    # Calculate Risk Premium
+    risk_premium = round(default_prob * 12.0, 2)
+    recommended_apr = round(base_rate + risk_premium, 2)
+
+    # Suggested Limit
+    recommended_limit = amount * (1.0 - default_prob) * (fico / 850.0)
+    
+    if default_prob >= 0.60 or loan.get("risk_tier") == "High":
+        decision_status = "REJECTED"
+        recommended_limit = 0.0
+    elif default_prob < 0.15:
+        decision_status = "APPROVED"
+        recommended_limit = round(recommended_limit, 2)
+    else:
+        decision_status = "REFER"
+        recommended_limit = round(recommended_limit, 2)
+
+    loan["decision_status"] = decision_status
+    loan["recommended_apr"] = recommended_apr
+    loan["recommended_limit"] = recommended_limit
+    loan["base_rate"] = base_rate
+    loan["risk_premium"] = risk_premium
+    return loan
+
+# ─── Routes ───────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def health_check():
+    model_trained = ml_engine.model is not None
+    return {
+        "status": "ok",
+        "service": "Default Prediction Model API",
+        "version": "3.0.0",
+        "database": "Supabase",
+        "model_loaded": model_trained,
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    }
+
 @app.get("/api/portfolio/summary")
 def get_portfolio_summary():
     """Returns portfolio-level KPIs computed from Supabase loans table."""
@@ -137,6 +192,9 @@ def get_loans(
             loans = [l for l in loans if q in l.get("borrower_name", "").lower()
                                       or q in l.get("id", "").lower()]
 
+        # Inject decision parameters
+        loans = [inject_decision_engine(l) for l in loans]
+
         return {"loans": loans, "total": len(loans)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
@@ -148,7 +206,9 @@ def get_loan(loan_id: str):
         result = supabase.table("loans").select("*").eq("id", loan_id).single().execute()
         if not result.data:
             raise HTTPException(status_code=404, detail=f"Loan {loan_id} not found.")
-        return result.data
+        
+        loan_data = inject_decision_engine(result.data)
+        return loan_data
     except HTTPException:
         raise
     except Exception as e:
@@ -200,7 +260,8 @@ def create_loan_application(app_data: NewLoanApplication):
 
         # Write to Supabase
         res_insert = supabase.table("loans").insert(db_record).execute()
-        return res_insert.data[0] if res_insert.data else db_record
+        inserted_data = res_insert.data[0] if res_insert.data else db_record
+        return inject_decision_engine(inserted_data)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create loan application: {str(e)}")

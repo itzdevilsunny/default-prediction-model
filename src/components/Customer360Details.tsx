@@ -92,6 +92,77 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
         </div>
       </div>
 
+      {/* Decision Engine & Pricing Recommendation Card */}
+      <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/10 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
+            Decisioning & Pricing Engine
+          </span>
+          <span className={`text-xs font-bold uppercase px-2.5 py-1 rounded-md border ${
+            loan.decisionStatus === 'APPROVED' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+            loan.decisionStatus === 'REJECTED' ? 'bg-rose-50 border-rose-200 text-rose-700' :
+            'bg-amber-50 border-amber-200 text-amber-700'
+          }`}>
+            {loan.decisionStatus === 'APPROVED' ? '🟢 APPROVED' :
+             loan.decisionStatus === 'REJECTED' ? '🔴 REJECTED' :
+             '🟡 REFER'}
+          </span>
+        </div>
+
+        {/* Credit Limit Rec */}
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-zinc-400">Credit Limit Recommendation</span>
+            <span className="font-bold text-zinc-900">
+              {loan.decisionStatus === 'REJECTED' ? '$0' : formatCurrency(loan.recommendedLimit)}
+            </span>
+          </div>
+          <div className="w-full bg-zinc-100 h-2 rounded overflow-hidden flex">
+            <div 
+              className={`h-full ${
+                loan.decisionStatus === 'APPROVED' ? 'bg-emerald-500' :
+                loan.decisionStatus === 'REJECTED' ? 'bg-rose-500 w-0' :
+                'bg-amber-500'
+              }`}
+              style={{ 
+                width: loan.decisionStatus === 'REJECTED' ? '0%' : 
+                       `${Math.min(100, (loan.recommendedLimit / loan.amount) * 100)}%` 
+              }}
+            ></div>
+          </div>
+          <div className="flex justify-between text-[9px] text-zinc-400">
+            <span>Requested: {formatCurrency(loan.amount)}</span>
+            <span>Recommended Limit Ratio: {loan.decisionStatus === 'REJECTED' ? '0%' : 
+              `${Math.round((loan.recommendedLimit / loan.amount) * 100)}%`}</span>
+          </div>
+        </div>
+
+        {/* Interest Rate Pricing Rec */}
+        <div className="border-t border-zinc-200/80 pt-3 space-y-2">
+          <div className="flex justify-between text-xs">
+            <span className="text-zinc-400">Recommended Pricing</span>
+            <span className="font-bold text-blue-600 font-mono text-sm">
+              {loan.recommendedApr.toFixed(2)}% APR
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-2 text-center bg-white border border-zinc-100 p-2 rounded-lg text-[10px] font-mono">
+            <div>
+              <span className="text-[8px] text-zinc-400 block uppercase font-sans">Base APR</span>
+              <span className="font-bold text-zinc-700">{loan.baseRate.toFixed(2)}%</span>
+            </div>
+            <div className="border-x border-zinc-100">
+              <span className="text-[8px] text-zinc-400 block uppercase font-sans">Risk Premium</span>
+              <span className="font-bold text-rose-600">+{loan.riskPremium.toFixed(2)}%</span>
+            </div>
+            <div>
+              <span className="text-[8px] text-zinc-400 block uppercase font-sans">Requested APR</span>
+              <span className="font-bold text-zinc-400">{loan.interestRate.toFixed(2)}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Outcome Resolution Feedback Loop (Close the loop) */}
       <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/10 space-y-3">
         <div className="flex items-center gap-1.5 text-zinc-800 font-bold text-xs uppercase tracking-wider">
