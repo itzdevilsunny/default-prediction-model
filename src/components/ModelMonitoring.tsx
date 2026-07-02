@@ -10,6 +10,7 @@ interface ModelMonitoringProps {
 export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) => {
   const evolutionChartRef = useRef<HTMLDivElement>(null);
   const importanceChartRef = useRef<HTMLDivElement>(null);
+  const driftChartRef = useRef<HTMLDivElement>(null);
 
   const [metrics, setMetrics] = useState<ModelMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -142,7 +143,6 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
     if (!importanceChartRef.current) return;
     const chart = echarts.init(importanceChartRef.current);
 
-    // Sort ascending for horizontal bar chart
     const rawImportance = metrics?.feature_importance || [
       { feature: 'Loan Officer Notes Sentiment', importance: 24 },
       { feature: 'Missed Payments (12M)', importance: 19 },
@@ -206,12 +206,85 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
     };
   }, [metrics]);
 
+  // 3. FICO Score Population Drift Chart (PSI)
+  useEffect(() => {
+    if (!driftChartRef.current) return;
+    const chart = echarts.init(driftChartRef.current);
+
+    const baselineDist = metrics?.drift?.baseline || [25, 45, 30];
+    const activeDist = metrics?.drift?.active || [25, 45, 30];
+
+    const option = {
+      grid: {
+        top: 30,
+        bottom: 30,
+        left: 45,
+        right: 20,
+      },
+      legend: {
+        data: ['Baseline (Train)', 'Active (Ingested)'],
+        textStyle: { color: '#71717a', fontSize: 10 },
+        top: 0
+      },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: '#ffffff',
+        borderColor: '#e4e4e7',
+        borderWidth: 1,
+        textStyle: {
+          color: '#09090b',
+          fontFamily: 'system-ui',
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: ['Poor (<600)', 'Good (600-720)', 'Excellent (>720)'],
+        axisLine: { lineStyle: { color: '#e4e4e7' } },
+        axisLabel: { color: '#71717a', fontSize: 10 },
+      },
+      yAxis: {
+        type: 'value',
+        splitLine: { lineStyle: { color: '#f4f4f5' } },
+        axisLabel: { color: '#71717a', fontSize: 10, formatter: '{value}%' },
+      },
+      series: [
+        {
+          name: 'Baseline (Train)',
+          type: 'bar',
+          data: baselineDist,
+          itemStyle: { color: '#e4e4e7', borderRadius: [2, 2, 0, 0] },
+          barWidth: '25%',
+        },
+        {
+          name: 'Active (Ingested)',
+          type: 'bar',
+          data: activeDist,
+          itemStyle: { color: '#1d4ed8', borderRadius: [2, 2, 0, 0] },
+          barWidth: '25%',
+        }
+      ],
+    };
+
+    chart.setOption(option);
+    const handleResize = () => chart.resize();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.dispose();
+    };
+  }, [metrics]);
+
   // Derived metrics with fallback values
   const accuracy = metrics ? (metrics.accuracy * 100).toFixed(1) : '91.2';
   const aucRoc = metrics ? metrics.auc_roc.toFixed(3) : '0.942';
   const f1Score = metrics ? metrics.f1_score.toFixed(3) : '0.885';
   const precision = metrics ? metrics.precision.toFixed(3) : '0.891';
   const recall = metrics ? metrics.recall.toFixed(3) : '0.879';
+
+  // Drift metrics derived
+  const psiVal = metrics?.drift?.psi !== undefined ? metrics.drift.psi.toFixed(3) : '0.042';
+  const pVal = metrics?.drift?.p_value !== undefined ? metrics.drift.p_value.toFixed(3) : '0.985';
+  const driftStatus = metrics?.drift?.status || 'Low';
 
   const cm = metrics?.confusion_matrix || {
     true_negative: 24,
@@ -229,7 +302,7 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
   return (
     <div className="space-y-8 animate-fadeIn relative">
       {isLoading && (
-        <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-10">
+        <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10">
           <Loader2 className="h-10 w-10 text-brand-accent animate-spin" />
         </div>
       )}
@@ -244,18 +317,37 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
             Evaluate the mathematical validity, accuracy gains, and explainability vectors of the active prediction engine.
           </p>
         </div>
-        <button
-          onClick={handleRetrain}
-          disabled={isRetraining}
-          className="mt-4 md:mt-0 flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
-        >
-          {isRetraining ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Retrain Model Pipeline
-        </button>
+        
+        {/* Live Drift Alert Badge in Title Row */}
+        <div className="flex items-center gap-3 mt-4 md:mt-0">
+          <div className={`flex items-center gap-2 border px-3 py-1.5 rounded-lg text-xs font-bold ${
+            driftStatus === 'High' ? 'bg-rose-50 border-rose-200 text-rose-700 animate-pulse' :
+            driftStatus === 'Moderate' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+            'bg-emerald-50 border-emerald-200 text-emerald-700'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${
+              driftStatus === 'High' ? 'bg-rose-600' :
+              driftStatus === 'Moderate' ? 'bg-amber-500' :
+              'bg-emerald-600'
+            }`}></span>
+            {driftStatus === 'High' ? 'Critical Drift - Retrain Needed' :
+             driftStatus === 'Moderate' ? 'Moderate Population Shift' :
+             'Population Stable (No Drift)'}
+          </div>
+
+          <button
+            onClick={handleRetrain}
+            disabled={isRetraining}
+            className="flex items-center gap-2 bg-zinc-950 text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50"
+          >
+            {isRetraining ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Retrain Model Pipeline
+          </button>
+        </div>
       </div>
 
       {/* Accuracy Targets Card */}
@@ -310,7 +402,7 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
 
       </div>
 
-      {/* Bottom Grid: Confusion Matrix & Data Audit Logs */}
+      {/* Bottom Grid: Confusion Matrix & Population Drift & Data Audit Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Confusion Matrix */}
@@ -353,8 +445,28 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
           </div>
         </div>
 
+        {/* Data Drift Distribution Chart */}
+        <div className="premium-card p-6 bg-white flex flex-col justify-between">
+          <div>
+            <h3 className="text-sm font-extrabold text-zinc-900 mb-1">FICO Distribution Shift</h3>
+            <p className="text-xs text-zinc-400 mb-4">Baseline (Train) vs Active (Ingested) FICO buckets</p>
+            <div ref={driftChartRef} className="h-44 w-full"></div>
+          </div>
+          
+          <div className="border-t border-zinc-100 pt-4 mt-4 text-[10px] text-zinc-400 flex flex-col gap-1 font-mono">
+            <div className="flex justify-between">
+              <span>Population Index (PSI):</span>
+              <span className="font-bold text-zinc-700">{psiVal}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>KS Test Significance:</span>
+              <span className="font-bold text-zinc-700">p = {pVal}</span>
+            </div>
+          </div>
+        </div>
+
         {/* Data Pipeline Auditing logs */}
-        <div className="lg:col-span-2 premium-card p-6 bg-white">
+        <div className="premium-card p-6 bg-white">
           <h3 className="text-sm font-extrabold text-zinc-900 mb-1">Active Pipeline Training Logs</h3>
           <p className="text-xs text-zinc-400 mb-4">Latest ETL pipeline events and model registry iterations.</p>
 
@@ -362,7 +474,7 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
             <div className="flex items-start gap-3 border-l-2 border-zinc-950 pl-3">
               <span className="font-mono text-zinc-400 min-w-[70px]">14:22:10</span>
               <div>
-                <span className="font-bold text-zinc-900">Model Registry Retention Iteration (v3.0.0)</span>
+                <span className="font-bold text-zinc-900">Model Registry Retention Iteration (v3.1.0)</span>
                 <p className="text-zinc-500 mt-0.5">Retraining trigger processed successfully. Hyperparameters standard-fitted on resolved database logs. F1 score stabilized at {f1Score}.</p>
               </div>
             </div>
@@ -383,16 +495,31 @@ export const ModelMonitoring: React.FC<ModelMonitoringProps> = ({ apiOnline }) =
               </div>
             </div>
 
-            <div className="flex items-start gap-3 border-l-2 border-amber-400 pl-3">
-              <span className="font-mono text-zinc-400 min-w-[70px]">08:00:00</span>
-              <div>
-                <span className="font-bold text-zinc-950 flex items-center gap-1 text-amber-700">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  Minor Concept Drift Warning
-                </span>
-                <p className="text-zinc-500 mt-0.5">Evaluation metrics within normal margins. Model drift checked (drift ratio = 1.2%). Retraining recommended after adding more borrower outcomes.</p>
+            {driftStatus === 'High' && (
+              <div className="flex items-start gap-3 border-l-2 border-rose-500 pl-3 animate-pulse">
+                <span className="font-mono text-zinc-400 min-w-[70px]">08:00:00</span>
+                <div>
+                  <span className="font-bold text-rose-700 flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    Critical Concept Drift Warning
+                  </span>
+                  <p className="text-zinc-500 mt-0.5">FICO distribution shifts exceeded trigger threshold (PSI = {psiVal}). Re-training pipeline trigger recommended.</p>
+                </div>
               </div>
-            </div>
+            )}
+            
+            {driftStatus !== 'High' && (
+              <div className="flex items-start gap-3 border-l-2 border-amber-400 pl-3">
+                <span className="font-mono text-zinc-400 min-w-[70px]">08:00:00</span>
+                <div>
+                  <span className="font-bold text-zinc-950 flex items-center gap-1 text-amber-700">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    Concept Drift Audited
+                  </span>
+                  <p className="text-zinc-500 mt-0.5">Evaluation metrics within normal margins. Model drift checked (drift ratio = {psiVal}). Retraining recommended after adding more borrower outcomes.</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

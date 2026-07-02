@@ -178,6 +178,81 @@ class DefaultPredictionEngine:
             "shap_explanations": shap_explanations
         }
 
+    def calculate_drift(self, loans_data: list) -> dict:
+        """
+        Calculates Population Stability Index (PSI) and Kolmogorov-Smirnov test
+        on FICO scores to detect data drift between active loans and historical baselines.
+        """
+        if not loans_data or len(loans_data) < 5:
+            return {"psi": 0.0, "p_value": 1.0, "status": "Low", "baseline": [0, 0, 0], "active": [0, 0, 0]}
+
+        df = pd.DataFrame(loans_data)
+        
+        # 1. Split into baseline (resolved outcomes) and active (pending review)
+        baseline_df = df[df["actual_default"].notnull()].copy()
+        active_df = df[df["actual_default"].isnull()].copy()
+
+        # If we don't have enough active or baseline records, return empty drift
+        if len(baseline_df) < 3 or len(active_df) < 1:
+            return {
+                "psi": 0.0,
+                "p_value": 1.0,
+                "status": "Low",
+                "baseline": [33.3, 33.3, 33.3],
+                "active": [33.3, 33.3, 33.3]
+            }
+
+        # Select FICO scores
+        b_fico = baseline_df["fico_score"].astype(float).values
+        a_fico = active_df["fico_score"].astype(float).values
+
+        # 2. Run KS test (Kolmogorov-Smirnov) from scipy
+        from scipy.stats import ks_2samp
+        ks_res = ks_2samp(b_fico, a_fico)
+        p_value = round(float(ks_res.pvalue), 4)
+
+        # 3. Calculate PSI (Population Stability Index)
+        # Define FICO buckets: < 600, 600 - 720, > 720
+        def get_bucket_counts(values):
+            c1 = sum(1 for v in values if v < 600)
+            c2 = sum(1 for v in values if 600 <= v <= 720)
+            c3 = sum(1 for v in values if v > 720)
+            return np.array([c1, c2, c3], dtype=float)
+
+        b_counts = get_bucket_counts(b_fico)
+        a_counts = get_bucket_counts(a_fico)
+
+        # Normalize to fractions
+        b_frac = b_counts / len(b_fico)
+        a_frac = a_counts / len(a_fico)
+
+        # Handle zero divisions with epsilon smoothing
+        eps = 0.0001
+        b_frac = np.where(b_frac == 0, eps, b_frac)
+        a_frac = np.where(a_frac == 0, eps, a_frac)
+
+        # Calculate PSI = sum((actual - expected) * ln(actual / expected))
+        psi_val = sum((a_frac - b_frac) * np.log(a_frac / b_frac))
+        psi_val = max(0.0, round(float(psi_val), 4))
+
+        # Classify drift severity
+        if psi_val < 0.10:
+            status = "Low"
+        elif psi_val < 0.25:
+            status = "Moderate"
+        else:
+            status = "High"
+
+        # Return percentages for ECharts rendering
+        return {
+            "psi": psi_val,
+            "p_value": p_value,
+            "status": status,
+            "baseline": [round(float(f) * 100, 1) for f in b_frac],
+            "active": [round(float(f) * 100, 1) for f in a_frac]
+        }
+
+
 # Global singleton engine
 ml_engine = DefaultPredictionEngine()
 

@@ -302,7 +302,7 @@ def get_model_metrics():
         raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
 
     # Filter resolved historical loans (where actual_default is 0 or 1)
-    resolved = [l for l in all_loans if l["actual_default"] is not null]
+    resolved = [l for l in all_loans if l["actual_default"] is not None]
     
     if not resolved:
         # Fallback default values if no resolved loans exist yet
@@ -403,6 +403,9 @@ def get_model_metrics():
             {"feature": "Communication Sentiment Index", "importance": 10}
         ]
 
+    # Calculate Data Drift metrics (PSI / KS)
+    drift = ml_engine.calculate_drift(all_loans)
+
     return {
         "accuracy": round(accuracy, 3),
         "auc_roc": round(auc_roc, 3),
@@ -422,5 +425,6 @@ def get_model_metrics():
             "false_positive": fp,
             "false_negative": fn,
             "true_positive": tp
-        }
+        },
+        "drift": drift
     }

@@ -76,6 +76,13 @@ export interface ModelMetrics {
     false_negative: number;
     true_positive: number;
   };
+  drift?: {
+    psi: number;
+    p_value: number;
+    status: 'Low' | 'Moderate' | 'High';
+    baseline: number[];
+    active: number[];
+  };
 }
 
 export interface AuditEntry {
