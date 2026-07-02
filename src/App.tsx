@@ -4,6 +4,7 @@ import { ApplicationTracker } from './components/ApplicationTracker';
 import { ModelMonitoring } from './components/ModelMonitoring';
 import { GeminiCopilot } from './components/GeminiCopilot';
 import { Login } from './components/Login';
+import { AuditLogViewer } from './components/AuditLogViewer';
 import { checkApiStatus, type ApiStatus } from './services/api';
 import { supabase } from './lib/supabase';
 import { 
@@ -18,10 +19,11 @@ import {
   WifiOff,
   Loader2,
   LogOut,
-  UserCheck
+  UserCheck,
+  ShieldCheck
 } from 'lucide-react';
 
-type TabType = 'overview' | 'underwriting' | 'monitoring';
+type TabType = 'overview' | 'underwriting' | 'monitoring' | 'audits';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -253,6 +255,19 @@ function App() {
                   <Cpu className="h-4 w-4" />
                   Model Diagnostics
                 </button>
+                {(userRole === 'manager' || userRole === 'auditor') && (
+                  <button
+                    onClick={() => { setActiveTab('audits'); setSelectedLoanId(null); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                      activeTab === 'audits' 
+                        ? 'bg-zinc-950 text-white' 
+                        : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
+                    }`}
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    Compliance Audits
+                  </button>
+                )}
               </nav>
             </div>
 
@@ -335,6 +350,9 @@ function App() {
             )}
             {activeTab === 'monitoring' && (
               <ModelMonitoring apiOnline={apiStatus.online} userRole={userRole} />
+            )}
+            {activeTab === 'audits' && (
+              <AuditLogViewer onInspectLoan={handleInspectLoanFromCopilot} />
             )}
           </div>
         </main>
