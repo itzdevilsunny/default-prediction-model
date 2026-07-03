@@ -120,13 +120,15 @@ export function mapDbLoanToLoan(dbLoan: any): Loan {
   const fico = Number(dbLoan.fico_score || 700);
   const amount = Number(dbLoan.amount || 250000);
   const interestRate = Number(dbLoan.interest_rate || 7.0);
-
-  // Compute local defaults if backend is still deploying
-  const decisionStatus = dbLoan.decision_status || 
-    (defaultProb >= 0.60 ? 'REJECTED' : defaultProb < 0.15 ? 'APPROVED' : 'REFER');
   
-  const baseRate = dbLoan.base_rate !== undefined ? Number(dbLoan.base_rate) : interestRate;
-  const riskPremium = dbLoan.risk_premium !== undefined ? Number(dbLoan.risk_premium) : roundToTwo(defaultProb * 12.0);
+  const settings = getLendingSettings();
+
+  // Compute local defaults based on custom thresholds
+  const decisionStatus = dbLoan.decision_status || 
+    (defaultProb >= settings.highRiskProbThreshold ? 'REJECTED' : defaultProb < settings.lowRiskProbThreshold ? 'APPROVED' : 'REFER');
+  
+  const baseRate = dbLoan.base_rate !== undefined ? Number(dbLoan.base_rate) : settings.baseApr;
+  const riskPremium = dbLoan.risk_premium !== undefined ? Number(dbLoan.risk_premium) : roundToTwo(defaultProb * settings.riskPremiumMultiplier);
   const recommendedApr = dbLoan.recommended_apr !== undefined ? Number(dbLoan.recommended_apr) : roundToTwo(baseRate + riskPremium);
   
   const recommendedLimit = dbLoan.recommended_limit !== undefined ? Number(dbLoan.recommended_limit) : 
@@ -471,4 +473,36 @@ export async function runStressTest(req: StressTestRequest): Promise<StressTestR
     }
   }
   throw new Error('Stress testing failed on all API endpoints');
+}
+
+// ─── Lending & Risk Settings ──────────────────────────────────────────────────
+
+export interface LendingSettings {
+  baseApr: number;
+  maxDti: number;
+  highRiskProbThreshold: number;
+  lowRiskProbThreshold: number;
+  riskPremiumMultiplier: number;
+}
+
+export function getLendingSettings(): LendingSettings {
+  const stored = localStorage.getItem('lending_settings');
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      // ignore
+    }
+  }
+  return {
+    baseApr: 7.0,
+    maxDti: 45.0,
+    highRiskProbThreshold: 0.60,
+    lowRiskProbThreshold: 0.15,
+    riskPremiumMultiplier: 12.0
+  };
+}
+
+export function saveLendingSettings(settings: LendingSettings): void {
+  localStorage.setItem('lending_settings', JSON.stringify(settings));
 }

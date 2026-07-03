@@ -22,12 +22,14 @@ import {
   UserCheck,
   ShieldCheck,
   Bell,
-  Info
+  Info,
+  Settings
 } from 'lucide-react';
 
 import { StressTesting } from './components/StressTesting';
+import { RiskSettings } from './components/RiskSettings';
 
-type TabType = 'overview' | 'underwriting' | 'monitoring' | 'audits' | 'stress_test';
+type TabType = 'overview' | 'underwriting' | 'monitoring' | 'audits' | 'stress_test' | 'settings';
 
 interface SystemNotification {
   id: string;
@@ -458,6 +460,19 @@ function App() {
                       <TrendingUp className="h-4 w-4" />
                       Stress Testing
                     </button>
+                    {userRole === 'manager' && (
+                      <button
+                        onClick={() => { setActiveTab('settings'); setSelectedLoanId(null); }}
+                        className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                          activeTab === 'settings' 
+                            ? 'bg-zinc-950 text-white' 
+                            : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
+                        }`}
+                      >
+                        <Settings className="h-4 w-4" />
+                        Risk Settings
+                      </button>
+                    )}
                   </>
                 )}
               </nav>
@@ -548,6 +563,9 @@ function App() {
             )}
             {activeTab === 'stress_test' && (
               <StressTesting onInspectLoan={handleInspectLoanFromCopilot} apiOnline={apiStatus.online} />
+            )}
+            {activeTab === 'settings' && (
+              <RiskSettings />
             )}
           </div>
         </main>
