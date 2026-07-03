@@ -31,7 +31,19 @@ export const GeminiCopilot: React.FC<GeminiCopilotProps> = ({ onInspectLoan, isO
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const handleSend = (e: React.FormEvent) => {
+  const renderMarkdown = (text: string) => {
+    let html = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/^\s*[-•*]\s+(.*)$/gm, "<li class='ml-3 list-disc my-0.5'>$1</li>");
+    html = html.replace(/`(.*?)`/g, "<code class='bg-zinc-100 px-1 py-0.5 rounded text-[10px] font-mono'>$1</code>");
+    html = html.replace(/\n/g, "<br />");
+    return <div dangerouslySetInnerHTML={{ __html: html }} className="prose prose-sm leading-relaxed" />;
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputVal.trim()) return;
 
@@ -44,49 +56,148 @@ export const GeminiCopilot: React.FC<GeminiCopilotProps> = ({ onInspectLoan, isO
       text: userMsgText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    setMessages(prev => [...prev, userMsg]);
+    
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
     setIsTyping(true);
 
-    // Mock Gemini processing
-    setTimeout(() => {
-      setIsTyping(false);
-      let replyText = "I parsed your query but couldn't find a matching portfolio analysis rule. Can you try asking about 'high default risks', 'Zeta Manufacturing', or 'tariff policies'?";
-      let links: Message['links'] = [];
+    try {
+      const historyPayload = updatedMessages.map(m => ({
+        role: m.sender === 'user' ? 'user' : 'model',
+        content: m.text
+      }));
 
-      const query = userMsgText.toLowerCase();
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMsgText,
+          history: historyPayload
+        })
+      });
 
-      if (query.includes('high') || query.includes('default') || query.includes('risk')) {
-        replyText = "Based on our 12-month forward forecasting model, there are currently 5 borrowers classified as **High Risk** (probability of default > 70%). These profiles incorporate negative sentiment from call logs and economic sectors:\n\n1. **Zeta Manufacturing LLC** (91.2% PD) - Operating cash flow compression & tariffs.\n2. **Green Horizon Agriculture** (81.4% PD) - Crop losses & weather issues.\n3. **Elite Freight Logistics** (78.5% PD) - Lost major corporate contract.\n4. **Marcus Vance** (74.1% PD) - High card utilization & job transition.\n\nClick a profile below to load it into the Underwriting Console:";
-        links = [
-          { text: "Inspect Zeta Manufacturing", action: "inspect", loanId: "LN-2026-041" },
-          { text: "Inspect Green Horizon Agriculture", action: "inspect", loanId: "LN-2026-204" },
-          { text: "Inspect Elite Freight Logistics", action: "inspect", loanId: "LN-2026-112" }
-        ];
-      } else if (query.includes('zeta') || query.includes('manufacturing')) {
-        const zeta = mockLoans.find(l => l.id === "LN-2026-041");
-        if (zeta) {
-          replyText = `**Zeta Manufacturing LLC (${zeta.id}) Risk Synthesis:**\n\n• **Structured Headwinds:** FICO score has degraded to **590**; DTI is high at **48.5%** with **3 missed payments** in the last 12 months.\n• **Unstructured Sentiment Analysis:** Call log text indicates high friction. Loan officer notes cite a **40% slowdown in inventory turnover** and management disputes.\n• **Macro/Sector Alerts:** Industrial sector contractions and tariff pressure (manufacturing index contracting for 3 quarters).\n\n**Recommendation:** Restructure the credit lines or secure additional asset collateral immediately.`;
-          links = [
-            { text: "Open Underwriter Console for Zeta", action: "inspect", loanId: "LN-2026-041" }
-          ];
-        }
-      } else if (query.includes('tariff') || query.includes('sector') || query.includes('policy') || query.includes('news')) {
-        replyText = "I found 3 SME & corporate loans whose default forecasts are heavily influenced by adverse sector headlines and macro tariff economic indexes:\n\n• **Zeta Manufacturing LLC** - Tariff index increases causing raw material inflation.\n• **Green Horizon Agriculture** - Export shipping disruptions & crop tariffs.\n• **Elite Freight Logistics** - Shipping logistics insurance spikes (+12%).\n\nWould you like to analyze these files?";
-        links = [
-          { text: "Review Zeta Manufacturing", action: "inspect", loanId: "LN-2026-041" },
-          { text: "Review Green Horizon Agriculture", action: "inspect", loanId: "LN-2026-204" }
-        ];
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const geminiMsg: Message = {
-        sender: 'gemini',
-        text: replyText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        links: links.length > 0 ? links : undefined
-      };
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder('utf-8');
 
-      setMessages(prev => [...prev, geminiMsg]);
-    }, 1200);
+      if (!reader) {
+        throw new Error("Response body is not readable.");
+      }
+
+      setIsTyping(false);
+
+      // Create an empty gemini message to append chunks to
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'gemini',
+          text: "",
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+
+      let geminiMsgText = "";
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.type === 'FINAL_RESPONSE') {
+                geminiMsgText += parsed.content;
+                setMessages(prev => {
+                  const copy = [...prev];
+                  if (copy.length > 0) {
+                    const last = copy[copy.length - 1];
+                    last.text = geminiMsgText;
+                    
+                    const extracted = geminiMsgText.match(/LN-2026-\d{3}/g);
+                    if (extracted) {
+                      const uniqueIds = Array.from(new Set(extracted));
+                      last.links = uniqueIds.map(id => {
+                        const loan = mockLoans.find(l => l.id === id);
+                        return {
+                          text: loan ? `Inspect ${loan.borrowerName}` : `Inspect Loan ${id}`,
+                          action: "inspect",
+                          loanId: id
+                        };
+                      });
+                    }
+                  }
+                  return copy;
+                });
+              }
+            } catch (e) {
+              console.error("Error parsing SSE line:", line, e);
+            }
+          }
+        }
+      }
+
+      if (buffer.trim().startsWith('data:')) {
+        const dataStr = buffer.trim().slice(5).trim();
+        if (dataStr !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(dataStr);
+            if (parsed.type === 'FINAL_RESPONSE') {
+              geminiMsgText += parsed.content;
+              setMessages(prev => {
+                const copy = [...prev];
+                if (copy.length > 0) {
+                  const last = copy[copy.length - 1];
+                  last.text = geminiMsgText;
+                  
+                  const extracted = geminiMsgText.match(/LN-2026-\d{3}/g);
+                  if (extracted) {
+                    const uniqueIds = Array.from(new Set(extracted));
+                    last.links = uniqueIds.map(id => {
+                      const loan = mockLoans.find(l => l.id === id);
+                      return {
+                        text: loan ? `Inspect ${loan.borrowerName}` : `Inspect Loan ${id}`,
+                        action: "inspect",
+                        loanId: id
+                      };
+                    });
+                  }
+                }
+                return copy;
+              });
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      }
+
+    } catch (err: any) {
+      console.error("Error fetching Gemini response:", err);
+      setIsTyping(false);
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'gemini',
+          text: `⚠️ **Failed to connect to Risk Copilot backend.**\n\nEnsure that the local FastAPI server is running on port 8000.\n\n*Error details: ${err.message || err}*`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+    }
   };
 
   if (!isOpen) return null;
@@ -125,7 +236,7 @@ export const GeminiCopilot: React.FC<GeminiCopilotProps> = ({ onInspectLoan, isO
                 <div className={`p-3 rounded-lg border ${
                   isGemini ? 'bg-zinc-50/50 border-zinc-100 text-zinc-800' : 'bg-brand-accent text-white border-brand-accent'
                 }`}>
-                  <p className="whitespace-pre-line leading-relaxed font-sans">{msg.text}</p>
+                  {isGemini ? renderMarkdown(msg.text) : <p className="whitespace-pre-line leading-relaxed font-sans">{msg.text}</p>}
                   
                   {/* Actions / Links */}
                   {msg.links && (
