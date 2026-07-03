@@ -489,3 +489,94 @@ def get_model_metrics():
         },
         "drift": drift
     }
+
+# ─── Stress Testing ───────────────────────────────────────────────────────────
+
+class StressTestRequest(BaseModel):
+    fico_shift: float
+    rate_shift: float
+    missed_payments_shift: int
+    sentiment_shift: Optional[str] = None # "Positive", "Neutral", "Negative" or None
+
+@app.post("/api/model/stress-test")
+def run_stress_test(req: StressTestRequest):
+    """Simulates economic shocks across active portfolio using prediction engine."""
+    try:
+        res = supabase.table("loans").select("*").execute()
+        loans = res.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
+
+    if not loans:
+        raise HTTPException(status_code=404, detail="No loan files found in database")
+
+    stressed_results = []
+    original_exposure = 0
+    stressed_exposure = 0
+    original_expected_loss = 0
+    stressed_expected_loss = 0
+    original_high_risk = 0
+    stressed_high_risk = 0
+
+    for loan in loans:
+        original_prob = float(loan.get("default_probability_12m") or 0.15)
+        original_tier = loan.get("risk_tier") or "Low"
+        amount = float(loan.get("amount") or 25000)
+        
+        original_exposure += amount
+        original_expected_loss += amount * original_prob
+        if original_tier == "High":
+            original_high_risk += 1
+
+        # Copy to stress
+        stressed_loan = dict(loan)
+        
+        # Apply shifts
+        stressed_loan["fico_score"] = max(300, min(850, int(loan.get("fico_score") or 700) + req.fico_shift))
+        stressed_loan["interest_rate"] = max(1.0, float(loan.get("interest_rate") or 7.0) + req.rate_shift)
+        stressed_loan["missed_payments_12m"] = max(0, int(loan.get("missed_payments_12m") or 0) + req.missed_payments_shift)
+        
+        if req.sentiment_shift:
+            stressed_loan["officer_notes_sentiment"] = req.sentiment_shift
+            stressed_loan["sector_news_sentiment"] = req.sentiment_shift
+            stressed_loan["communication_sentiment"] = req.sentiment_shift
+
+        # Predict using ML Engine
+        pred = ml_engine.predict(stressed_loan)
+        new_prob = float(pred["default_probability_12m"])
+        new_tier = pred["risk_tier"]
+
+        stressed_exposure += amount
+        stressed_expected_loss += amount * new_prob
+        if new_tier == "High":
+            stressed_high_risk += 1
+
+        stressed_results.append({
+            "id": loan["id"],
+            "borrower_name": loan["borrower_name"],
+            "amount": amount,
+            "original_fico": int(loan.get("fico_score") or 700),
+            "stressed_fico": stressed_loan["fico_score"],
+            "original_prob": original_prob,
+            "stressed_prob": new_prob,
+            "original_tier": original_tier,
+            "stressed_tier": new_tier
+        })
+
+    return {
+        "original_summary": {
+            "total_exposure": original_exposure,
+            "expected_loss": round(original_expected_loss, 2),
+            "expected_loss_pct": round((original_expected_loss / original_exposure) * 100, 2) if original_exposure > 0 else 0.0,
+            "high_risk_count": original_high_risk,
+            "avg_default_prob": round(sum(float(l.get("default_probability_12m") or 0.15) for l in loans) / len(loans), 4) if loans else 0.0
+        },
+        "stressed_summary": {
+            "total_exposure": stressed_exposure,
+            "expected_loss": round(stressed_expected_loss, 2),
+            "expected_loss_pct": round((stressed_expected_loss / stressed_exposure) * 100, 2) if stressed_exposure > 0 else 0.0,
+            "high_risk_count": stressed_high_risk,
+            "avg_default_prob": round(sum(l["stressed_prob"] for l in stressed_results) / len(stressed_results), 4) if stressed_results else 0.0
+        },
+        "loans": stressed_results
+    }

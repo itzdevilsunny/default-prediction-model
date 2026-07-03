@@ -23,7 +23,9 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
-type TabType = 'overview' | 'underwriting' | 'monitoring' | 'audits';
+import { StressTesting } from './components/StressTesting';
+
+type TabType = 'overview' | 'underwriting' | 'monitoring' | 'audits' | 'stress_test';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -256,17 +258,30 @@ function App() {
                   Model Diagnostics
                 </button>
                 {(userRole === 'manager' || userRole === 'auditor') && (
-                  <button
-                    onClick={() => { setActiveTab('audits'); setSelectedLoanId(null); }}
-                    className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
-                      activeTab === 'audits' 
-                        ? 'bg-zinc-950 text-white' 
-                        : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
-                    }`}
-                  >
-                    <ShieldCheck className="h-4 w-4" />
-                    Compliance Audits
-                  </button>
+                  <>
+                    <button
+                      onClick={() => { setActiveTab('audits'); setSelectedLoanId(null); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                        activeTab === 'audits' 
+                          ? 'bg-zinc-950 text-white' 
+                          : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
+                      }`}
+                    >
+                      <ShieldCheck className="h-4 w-4" />
+                      Compliance Audits
+                    </button>
+                    <button
+                      onClick={() => { setActiveTab('stress_test'); setSelectedLoanId(null); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                        activeTab === 'stress_test' 
+                          ? 'bg-zinc-950 text-white' 
+                          : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50'
+                      }`}
+                    >
+                      <TrendingUp className="h-4 w-4" />
+                      Stress Testing
+                    </button>
+                  </>
                 )}
               </nav>
             </div>
@@ -353,6 +368,9 @@ function App() {
             )}
             {activeTab === 'audits' && (
               <AuditLogViewer onInspectLoan={handleInspectLoanFromCopilot} />
+            )}
+            {activeTab === 'stress_test' && (
+              <StressTesting onInspectLoan={handleInspectLoanFromCopilot} apiOnline={apiStatus.online} />
             )}
           </div>
         </main>

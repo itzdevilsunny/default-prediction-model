@@ -420,3 +420,55 @@ export async function getModelMetrics(): Promise<ModelMetrics> {
   }
   throw new Error('Model metrics unavailable');
 }
+
+// ─── Stress Testing ───────────────────────────────────────────────────────────
+
+export interface StressTestRequest {
+  fico_shift: number;
+  rate_shift: number;
+  missed_payments_shift: number;
+  sentiment_shift: 'Positive' | 'Neutral' | 'Negative' | null;
+}
+
+export interface StressedLoan {
+  id: string;
+  borrower_name: string;
+  amount: number;
+  original_fico: number;
+  stressed_fico: number;
+  original_prob: number;
+  stressed_prob: number;
+  original_tier: 'Low' | 'Medium' | 'High';
+  stressed_tier: 'Low' | 'Medium' | 'High';
+}
+
+export interface StressTestSummary {
+  total_exposure: number;
+  expected_loss: number;
+  expected_loss_pct: number;
+  high_risk_count: number;
+  avg_default_prob: number;
+}
+
+export interface StressTestResponse {
+  original_summary: StressTestSummary;
+  stressed_summary: StressTestSummary;
+  loans: StressedLoan[];
+}
+
+export async function runStressTest(req: StressTestRequest): Promise<StressTestResponse> {
+  for (const base of API_BASES) {
+    try {
+      const res = await fetch(`${base}/api/model/stress-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+        signal: AbortSignal.timeout(20000)
+      });
+      if (res.ok) return res.json();
+    } catch (e) {
+      console.warn(`[API] Stress testing failed on ${base}:`, e);
+    }
+  }
+  throw new Error('Stress testing failed on all API endpoints');
+}
