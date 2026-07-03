@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { Loan } from '../services/api';
 import { submitAudit, submitLoanOutcome } from '../services/api';
-import { FileSpreadsheet, MessageSquare, Newspaper, HelpCircle, FileText, CheckCircle, ShieldAlert, Award } from 'lucide-react';
+import { FileSpreadsheet, MessageSquare, Newspaper, HelpCircle, FileText, CheckCircle, ShieldAlert, Award, Printer } from 'lucide-react';
 
 interface Customer360DetailsProps {
   loan: Loan;
@@ -21,6 +21,187 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
       currency: 'USD',
       maximumFractionDigits: 0,
     }).format(val);
+  };
+
+  const handlePrintMemo = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Pop-up blocker is preventing document export. Please enable pop-ups.');
+      return;
+    }
+
+    const decisionVal = loan.decisionStatus || (loan.defaultProbability12M >= 0.60 ? 'REJECTED' : loan.defaultProbability12M < 0.15 ? 'APPROVED' : 'REFER');
+    const recommendedLimitVal = loan.recommendedLimit !== undefined ? loan.recommendedLimit : 
+      (decisionVal === 'REJECTED' ? 0.0 : loan.amount * (1.0 - loan.defaultProbability12M) * (loan.ficoScore / 850.0));
+    const recommendedAprVal = loan.recommendedApr !== undefined ? loan.recommendedApr : (loan.interestRate + (loan.defaultProbability12M * 12.0));
+
+    const shapRows = (loan.shapExplanations || []).map(exp => {
+      const isRiskIncreaser = exp.value > 0;
+      return `
+        <tr>
+          <td style="padding: 8px; border-bottom: 1px solid #e4e4e7; font-weight: 500;">${exp.feature}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #e4e4e7; font-family: monospace; font-weight: bold; text-align: center;">${exp.displayValue}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #e4e4e7; font-family: monospace; font-weight: bold; text-align: right; color: ${isRiskIncreaser ? '#dc2626' : '#16a34a'};">
+            ${exp.value > 0 ? '+' : ''}${(exp.value * 100).toFixed(0)}%
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const content = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Credit Appraisal Memo - ${loan.borrowerName}</title>
+          <style>
+            body { font-family: 'Inter', system-ui, sans-serif; color: #18181b; margin: 40px; line-height: 1.5; font-size: 13px; }
+            .header { border-bottom: 3px double #d4d4d8; padding-bottom: 15px; margin-bottom: 30px; text-align: center; }
+            .header h1 { margin: 0; font-size: 20px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+            .header p { margin: 5px 0 0 0; font-size: 11px; color: #71717a; font-family: monospace; }
+            .section-title { font-size: 11px; font-weight: 800; text-transform: uppercase; color: #71717a; border-bottom: 1px solid #e4e4e7; padding-bottom: 4px; margin-top: 25px; margin-bottom: 12px; letter-spacing: 0.5px; }
+            .grid { display: grid; grid-template-cols: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
+            .grid-item { background: #fafafa; border: 1px solid #e4e4e7; padding: 10px; border-radius: 6px; }
+            .grid-item span { font-size: 10px; text-transform: uppercase; color: #71717a; font-weight: bold; display: block; }
+            .grid-item strong { font-size: 13px; color: #18181b; margin-top: 3px; display: block; font-family: monospace; }
+            .decision-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-family: monospace; text-transform: uppercase; font-size: 11px; }
+            .badge-approved { background: #d1fae5; color: #065f46; }
+            .badge-rejected { background: #fee2e2; color: #991b1b; }
+            .badge-refer { background: #fef3c7; color: #92400e; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th { background: #f4f4f5; padding: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #71717a; border-bottom: 1px solid #e4e4e7; }
+            .footer { margin-top: 50px; border-top: 1px solid #e4e4e7; padding-top: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+            .signature-line { border-top: 1px solid #71717a; width: 200px; text-align: center; padding-top: 5px; font-size: 11px; font-weight: bold; color: #71717a; }
+            @media print {
+              body { margin: 20px; }
+              button { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div style="text-align: right; margin-bottom: 15px;">
+            <button onclick="window.print()" style="background: #18181b; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 11px; cursor: pointer;">
+              Print / Save PDF
+            </button>
+          </div>
+          
+          <div class="header">
+            <h1>RiskShield Credit Appraisal Memo</h1>
+            <p>Ledger REF: ${loan.id} | Generated: ${new Date().toLocaleString()}</p>
+          </div>
+
+          <div class="section-title">Borrower Profile & Core Metrics</div>
+          <div class="grid">
+            <div class="grid-item">
+              <span>Applicant Name</span>
+              <strong style="font-family: inherit;">${loan.borrowerName}</strong>
+            </div>
+            <div class="grid-item">
+              <span>Segment Type</span>
+              <strong style="font-family: inherit;">${loan.borrowerSegment} Portfolio</strong>
+            </div>
+            <div class="grid-item">
+              <span>Exposure Requested</span>
+              <strong>${formatCurrency(loan.amount)}</strong>
+            </div>
+            <div class="grid-item">
+              <span>FICO Credit Score</span>
+              <strong>${loan.ficoScore}</strong>
+            </div>
+            <div class="grid-item">
+              <span>DTI Ratio</span>
+              <strong>${loan.dti.toFixed(1)}%</strong>
+            </div>
+            <div class="grid-item">
+              <span>Missed Payments (12M)</span>
+              <strong>${loan.missedPayments12M}</strong>
+            </div>
+          </div>
+
+          <div class="section-title">Machine Learning Appraisal & Pricing Recommendation</div>
+          <div class="grid">
+            <div class="grid-item">
+              <span>Automated Recommendation</span>
+              <div style="margin-top: 4px;">
+                <span class="decision-badge ${
+                  decisionVal === 'APPROVED' ? 'badge-approved' :
+                  decisionVal === 'REJECTED' ? 'badge-rejected' : 'badge-refer'
+                }">${decisionVal}</span>
+              </div>
+            </div>
+            <div class="grid-item">
+              <span>Suggested Pricing (APR)</span>
+              <strong>${recommendedAprVal.toFixed(2)}%</strong>
+            </div>
+            <div class="grid-item">
+              <span>Stressed Limit Sizing</span>
+              <strong>${formatCurrency(recommendedLimitVal)}</strong>
+            </div>
+            <div class="grid-item">
+              <span>Predicted Default Prob</span>
+              <strong style="color: ${loan.defaultProbability12M >= 0.50 ? '#dc2626' : 'inherit'};">
+                ${(loan.defaultProbability12M * 100).toFixed(1)}%
+              </strong>
+            </div>
+            <div class="grid-item">
+              <span>Algorithm Classification</span>
+              <strong style="color: ${
+                loan.riskTier === 'High' ? '#dc2626' :
+                loan.riskTier === 'Medium' ? '#d97706' : '#16a34a'
+              }; font-weight: bold;">${loan.riskTier} Risk</strong>
+            </div>
+            <div class="grid-item">
+              <span>Evaluation Date</span>
+              <strong>${loan.startDate || loan.lastUpdated}</strong>
+            </div>
+          </div>
+
+          <div class="section-title">AI Synthesis Risk Summary</div>
+          <div style="background: #fafafa; border: 1px solid #e4e4e7; padding: 12px; border-radius: 6px; font-style: italic; color: #52525b; margin-bottom: 20px; line-height: 1.6;">
+            "${loan.aiRiskSummary}"
+          </div>
+
+          <div class="section-title">Local Explainability Weights (SHAP Impact)</div>
+          ${shapRows ? `
+            <table>
+              <thead>
+                <tr>
+                  <th style="text-align: left;">Risk Factor</th>
+                  <th>Value</th>
+                  <th style="text-align: right;">Probability Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${shapRows}
+              </tbody>
+            </table>
+          ` : `
+            <p style="font-style: italic; color: #71717a; text-align: center;">No SHAP explanation weights logged for this applicant.</p>
+          `}
+
+          <div class="footer">
+            <div>
+              <div style="font-size: 10px; text-transform: uppercase; color: #71717a; font-weight: bold; margin-bottom: 5px;">Compliance Sign-off</div>
+              <div style="font-family: monospace; font-size: 11px; color: #3f3f46;">
+                Status: Verified Underwriter Audit Logged<br/>
+                Signed By: ${userRole === 'manager' ? 'Risk Manager' : userRole === 'auditor' ? 'Compliance Auditor' : 'Loan Officer'}
+              </div>
+            </div>
+            <div class="signature-line">
+              Authorizing Underwriter Signature
+            </div>
+          </div>
+          
+          <script>
+            window.onload = function() {
+              setTimeout(function() { window.print(); }, 250);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(content);
+    printWindow.document.close();
   };
 
   const handleAuditSubmit = async (e: React.FormEvent) => {
@@ -63,6 +244,21 @@ export const Customer360Details: React.FC<Customer360DetailsProps> = ({ loan, on
 
   return (
     <div className="p-5 space-y-6">
+      {/* Export Appraisal Memo Action Bar */}
+      <div className="flex justify-between items-center bg-zinc-50 border border-zinc-200 rounded-lg p-3">
+        <span className="text-xs font-bold text-zinc-700 flex items-center gap-1.5">
+          <FileText className="h-4 w-4 text-zinc-500" />
+          Appraisal File Memo
+        </span>
+        <button
+          onClick={handlePrintMemo}
+          className="flex items-center gap-1.5 bg-zinc-950 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg hover:bg-zinc-800 transition-colors cursor-pointer"
+        >
+          <Printer className="h-3.5 w-3.5" />
+          Print Appraisal Memo
+        </button>
+      </div>
+
       {/* Risk Probability Callout */}
       <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/20">
         <div className="flex items-center justify-between">
