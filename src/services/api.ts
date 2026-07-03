@@ -11,8 +11,11 @@ import {
   updateLoanRiskTier,
 } from '../lib/supabase';
 
-const PRIMARY_API = import.meta.env.VITE_API_PRIMARY || 'https://default-prediction-model-1.onrender.com';
-const FALLBACK_API = import.meta.env.VITE_API_FALLBACK || 'https://default-prediction-model.onrender.com';
+const API_BASES = [
+  'http://localhost:8000',
+  import.meta.env.VITE_API_PRIMARY || 'https://default-prediction-model-1.onrender.com',
+  import.meta.env.VITE_API_FALLBACK || 'https://default-prediction-model.onrender.com'
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -178,7 +181,7 @@ export async function checkApiStatus(): Promise<ApiStatus> {
     // Supabase unavailable, try Render
   }
 
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/`, { signal: AbortSignal.timeout(10000) });
       if (res.ok) return { online: true, url: base, source: 'render' };
@@ -206,7 +209,7 @@ export async function getPortfolioSummary(): Promise<PortfolioSummary> {
     // fall through
   }
 
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/api/portfolio/summary`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) return res.json();
@@ -238,7 +241,7 @@ export async function getLoans(params?: {
   if (params?.search) qs.set('search', params.search);
   const path = `/api/loans${qs.toString() ? '?' + qs.toString() : ''}`;
 
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
@@ -263,7 +266,7 @@ export async function getLoan(loanId: string): Promise<Loan> {
     // fall through
   }
 
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/api/loans/${loanId}`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
@@ -279,7 +282,7 @@ export async function getLoan(loanId: string): Promise<Loan> {
 /** Submit a new loan application. */
 export async function submitNewApplication(loanData: any): Promise<Loan> {
   // Always submit through FastAPI backend since it runs the python ML model predictions
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       // Map to snake_case for the FastAPI model
       const backendData = {
@@ -341,7 +344,7 @@ export async function submitAudit(loanId: string, entry: AuditEntry) {
       timestamp: log.created_at,
     };
   } catch {
-    for (const base of [PRIMARY_API, FALLBACK_API]) {
+    for (const base of API_BASES) {
       try {
         const res = await fetch(`${base}/api/loans/${loanId}/audit`, {
           method: 'POST',
@@ -358,7 +361,7 @@ export async function submitAudit(loanId: string, entry: AuditEntry) {
 
 /** Submit loan actual outcome resolution (0=Repaid, 1=Defaulted). */
 export async function submitLoanOutcome(loanId: string, actualDefault: number): Promise<boolean> {
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/api/loans/${loanId}/outcome`, {
         method: 'POST',
@@ -380,7 +383,7 @@ export async function getAuditLogs(loanId?: string) {
     const logs = await fetchAuditLogs(loanId);
     return { audits: logs, total: logs.length };
   } catch {
-    for (const base of [PRIMARY_API, FALLBACK_API]) {
+    for (const base of API_BASES) {
       try {
         const path = loanId ? `/api/audits?loan_id=${loanId}` : '/api/audits';
         const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
@@ -393,7 +396,7 @@ export async function getAuditLogs(loanId?: string) {
 
 /** Retrain model pipeline. */
 export async function retrainModel(): Promise<boolean> {
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/api/model/train`, {
         method: 'POST',
@@ -409,7 +412,7 @@ export async function retrainModel(): Promise<boolean> {
 
 /** Get model metrics — from Render backend. */
 export async function getModelMetrics(): Promise<ModelMetrics> {
-  for (const base of [PRIMARY_API, FALLBACK_API]) {
+  for (const base of API_BASES) {
     try {
       const res = await fetch(`${base}/api/model/metrics`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) return res.json();
